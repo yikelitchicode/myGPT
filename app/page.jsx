@@ -50,6 +50,7 @@ const COPY = {
     editedResult: "編修結果",
     freshRender: "生成結果",
     generatedResult: "生成結果",
+    generatedAt: "生成時間",
     downloadPng: "下載 PNG",
     emptyTitle: "你的生成圖片會顯示在這裡。",
     emptyBody: "不保留歷史、不寫入資料庫、沒有帳號狀態。只保留這次工作階段。",
@@ -63,6 +64,7 @@ const COPY = {
     restorePrevious: "找回上一張",
     previousImage: "上一張",
     nextImage: "下一張",
+    jumpToImage: "跳到第 {index} 張",
     resultPosition: "第 {current} 張 / 共 {total} 張",
     hiddenTitle: "目前沒有顯示中的照片。",
     hiddenBody: "你剛剛清除了目前顯示結果，但歷史照片還保留在這個工作階段中。",
@@ -116,6 +118,7 @@ const COPY = {
     editedResult: "Edited result",
     freshRender: "Fresh render",
     generatedResult: "Generated result",
+    generatedAt: "Generated at",
     downloadPng: "Download PNG",
     emptyTitle: "Your generated image will appear here.",
     emptyBody: "No history, no database, no account state. Just this session.",
@@ -129,6 +132,7 @@ const COPY = {
     restorePrevious: "Restore previous",
     previousImage: "Previous",
     nextImage: "Next",
+    jumpToImage: "Jump to image {index}",
     resultPosition: "Image {current} of {total}",
     hiddenTitle: "There is no image currently shown.",
     hiddenBody: "The visible result was cleared, but your recent images are still kept in this session.",
@@ -527,6 +531,14 @@ export default function HomePage() {
     setActiveResultIndex((current) => current + 1);
   }
 
+  function showResultAtIndex(index) {
+    if (index < 0 || index >= resultHistory.length) {
+      return;
+    }
+
+    setActiveResultIndex(index);
+  }
+
   if (!isReady) {
     return (
       <main className="shell">
@@ -739,15 +751,32 @@ export default function HomePage() {
             </div>
 
             {resultHistory.length ? (
-              <div className="history-bar">
-                <button type="button" className="ghost history-nav" onClick={showPreviousResult} disabled={!canGoPrevious}>
-                  {t.previousImage}
-                </button>
-                <p className="history-count">{visibleResultPosition}</p>
-                <button type="button" className="ghost history-nav" onClick={showNextResult} disabled={!canGoNext}>
-                  {t.nextImage}
-                </button>
-              </div>
+              <>
+                <div className="history-bar">
+                  <button type="button" className="ghost history-nav" onClick={showPreviousResult} disabled={!canGoPrevious}>
+                    {t.previousImage}
+                  </button>
+                  <p className="history-count">{visibleResultPosition}</p>
+                  <button type="button" className="ghost history-nav" onClick={showNextResult} disabled={!canGoNext}>
+                    {t.nextImage}
+                  </button>
+                </div>
+                <div className="thumbnail-strip" aria-label={t.outputEyebrow}>
+                  {resultHistory.map((result, index) => (
+                    <button
+                      key={`${result.createdAt}-${index}`}
+                      type="button"
+                      className={`thumbnail-card${index === activeResultIndex ? " active" : ""}`}
+                      onClick={() => showResultAtIndex(index)}
+                      aria-label={formatCopy(t.jumpToImage, { index: index + 1 })}
+                      aria-pressed={index === activeResultIndex}
+                    >
+                      <img src={result.src} alt={`${t.generatedResult} ${index + 1}`} />
+                      <span className="thumbnail-meta">{formatResultTime(result.createdAt, locale)}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
             ) : null}
 
             {status === "loading" ? (
@@ -773,6 +802,9 @@ export default function HomePage() {
             ) : currentResult ? (
               <div className="result-card">
                 <img src={currentResult.src} alt={t.generatedResult} />
+                <p className="result-meta">
+                  {t.generatedAt} {formatResultTime(currentResult.createdAt, locale)}
+                </p>
                 <a href={currentResult.src} download="pocket-image-lab.png" className="download">
                   {t.downloadPng}
                 </a>
@@ -848,4 +880,17 @@ function writeWaitProfile({ durationSeconds, quality, mode }) {
 
 function formatCopy(template, values) {
   return template.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? "");
+}
+
+function formatResultTime(timestamp, locale) {
+  try {
+    return new Intl.DateTimeFormat(locale === "zh-Hant" ? "zh-Hant-HK" : "en-US", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(new Date(timestamp));
+  } catch {
+    return "";
+  }
 }
