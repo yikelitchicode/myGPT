@@ -5,6 +5,9 @@ import { useEffect, useRef, useState } from "react";
 const SESSION_STORAGE_KEY = "pocket-image-lab-session";
 const LOCALE_STORAGE_KEY = "pocket-image-lab-locale";
 const RESULT_STORAGE_KEY = "pocket-image-lab-results";
+const RESULT_DB_NAME = "pocket-image-lab-results-db";
+const RESULT_STORE_NAME = "result-state";
+const RESULT_RECORD_KEY = "history";
 const WAIT_PROFILE_STORAGE_KEY = "pocket-image-lab-wait-profile";
 const DEFAULT_WAIT_ESTIMATES = {
   generate: { low: 8, medium: 14, high: 22 },
@@ -18,7 +21,7 @@ const COPY = {
     heroTitle: "Pocket Image Lab",
     signInEyebrow: "登入",
     signInTitle: "使用你自己的金鑰",
-    signInBody: "金鑰只會保存在這個瀏覽器分頁的工作階段中。登出或關閉分頁後就會清除。",
+    signInBody: "API Key 只會保存在這個瀏覽器分頁的工作階段中。登出或關閉分頁後會清除，但圖片歷史會保留到你關閉這個分頁為止。",
     apiKey: "API Key",
     baseUrl: "Base URL",
     imageModel: "圖片模型",
@@ -53,7 +56,7 @@ const COPY = {
     generatedAt: "生成時間",
     downloadPng: "下載 PNG",
     emptyTitle: "你的生成圖片會顯示在這裡。",
-    emptyBody: "不保留歷史、不寫入資料庫、沒有帳號狀態。只保留這次工作階段。",
+    emptyBody: "不寫入資料庫、沒有帳號狀態。圖片歷史只保留在這個分頁的工作階段中。",
     loadingTitle: "正在生成圖片",
     loadingBody: "請稍候，伺服器正在處理你的請求。",
     estimatedTotal: "預計等待",
@@ -86,7 +89,7 @@ const COPY = {
     heroTitle: "Pocket Image Lab",
     signInEyebrow: "Sign In",
     signInTitle: "Bring your own key",
-    signInBody: "The key is stored only in this browser tab session. Logout or close the tab and it is gone.",
+    signInBody: "The API key is stored only in this browser tab session. Logout or close the tab clears the key, while image history stays until this tab is closed.",
     apiKey: "API key",
     baseUrl: "Base URL",
     imageModel: "Image model",
@@ -121,7 +124,7 @@ const COPY = {
     generatedAt: "Generated at",
     downloadPng: "Download PNG",
     emptyTitle: "Your generated image will appear here.",
-    emptyBody: "No history, no database, no account state. Just this session.",
+    emptyBody: "No database and no account state. Image history stays only for this tab session.",
     loadingTitle: "Generating image",
     loadingBody: "Please wait while the server completes your request.",
     estimatedTotal: "Estimated total",
@@ -208,45 +211,60 @@ export default function HomePage() {
       : "";
 
   useEffect(() => {
-    const savedSession = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
-    const savedLocale = window.localStorage.getItem(LOCALE_STORAGE_KEY);
-    const savedResults = window.sessionStorage.getItem(RESULT_STORAGE_KEY);
-    const waitProfiles = readWaitProfiles();
+    let isMounted = true;
 
-    if (savedLocale === "en" || savedLocale === "zh-Hant") {
-      setLocale(savedLocale);
-      document.documentElement.lang = savedLocale;
-    } else {
-      document.documentElement.lang = "zh-Hant";
-    }
+    async function initializePage() {
+      const savedSession = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+      const savedLocale = window.localStorage.getItem(LOCALE_STORAGE_KEY);
+      const waitProfiles = readWaitProfiles();
 
-    if (savedSession) {
+      if (savedLocale === "en" || savedLocale === "zh-Hant") {
+        setLocale(savedLocale);
+        document.documentElement.lang = savedLocale;
+      } else {
+        document.documentElement.lang = "zh-Hant";
+      }
+
+      if (savedSession) {
+        try {
+          const session = JSON.parse(savedSession);
+          if (isMounted) {
+            setApiKey(session.apiKey || "");
+            setBaseURL(session.baseURL || "https://chickendog.cc/v1");
+            setImageModel(session.imageModel || "gpt-image-2");
+            setIsAuthenticated(Boolean(session.apiKey));
+          }
+        } catch {
+          window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+        }
+      }
+
       try {
-        const session = JSON.parse(savedSession);
-        setApiKey(session.apiKey || "");
-        setBaseURL(session.baseURL || "https://chickendog.cc/v1");
-        setImageModel(session.imageModel || "gpt-image-2");
-        setIsAuthenticated(Boolean(session.apiKey));
+        const persistedResults = await readPersistedResults();
+        const history = Array.isArray(persistedResults?.resultHistory) ? persistedResults.resultHistory : [];
+        const index = Number.isInteger(persistedResults?.activeResultIndex)
+          ? persistedResults.activeResultIndex
+          : history.length - 1;
+
+        if (isMounted) {
+          setResultHistory(history);
+          setActiveResultIndex(Math.max(-1, Math.min(index, history.length - 1)));
+        }
       } catch {
-        window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+        clearLegacyResultStorage();
+      }
+
+      if (isMounted) {
+        setEstimatedSeconds(waitProfiles.generate?.medium?.averageSeconds || DEFAULT_WAIT_ESTIMATES.generate.medium);
+        setIsReady(true);
       }
     }
 
-    if (savedResults) {
-      try {
-        const parsed = JSON.parse(savedResults);
-        const history = Array.isArray(parsed.resultHistory) ? parsed.resultHistory : [];
-        const index = Number.isInteger(parsed.activeResultIndex) ? parsed.activeResultIndex : history.length - 1;
-        setResultHistory(history);
-        setActiveResultIndex(Math.max(-1, Math.min(index, history.length - 1)));
-      } catch {
-        window.sessionStorage.removeItem(RESULT_STORAGE_KEY);
-      }
-    }
+    initializePage();
 
-    setEstimatedSeconds(waitProfiles.generate?.medium?.averageSeconds || DEFAULT_WAIT_ESTIMATES.generate.medium);
-
-    setIsReady(true);
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -281,13 +299,10 @@ export default function HomePage() {
       return;
     }
 
-    window.sessionStorage.setItem(
-      RESULT_STORAGE_KEY,
-      JSON.stringify({
-        resultHistory,
-        activeResultIndex
-      })
-    );
+    writePersistedResults({
+      resultHistory,
+      activeResultIndex
+    }).catch(() => {});
   }, [activeResultIndex, isReady, resultHistory]);
 
   useEffect(() => {
@@ -483,15 +498,12 @@ export default function HomePage() {
     setPrompt("");
     referenceImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
     setReferenceImages([]);
-    setResultHistory([]);
-    setActiveResultIndex(-1);
     setError("");
     setModel("");
     setMode("generate");
     setStatus("idle");
     setElapsedSeconds(0);
     setEstimatedSeconds(DEFAULT_WAIT_ESTIMATES.generate.medium);
-    window.sessionStorage.removeItem(RESULT_STORAGE_KEY);
     setIsAuthenticated(false);
   }
 
@@ -893,4 +905,98 @@ function formatResultTime(timestamp, locale) {
   } catch {
     return "";
   }
+}
+
+async function readPersistedResults() {
+  if (typeof window === "undefined" || !("indexedDB" in window)) {
+    return readLegacyResultStorage();
+  }
+
+  const database = await openResultsDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(RESULT_STORE_NAME, "readonly");
+    const store = transaction.objectStore(RESULT_STORE_NAME);
+    const request = store.get(RESULT_RECORD_KEY);
+
+    request.onsuccess = () => {
+      const value = request.result?.value || null;
+
+      if (value) {
+        clearLegacyResultStorage();
+      }
+
+      resolve(value || readLegacyResultStorage());
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function writePersistedResults(value) {
+  if (typeof window === "undefined" || !("indexedDB" in window)) {
+    return;
+  }
+
+  const database = await openResultsDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(RESULT_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(RESULT_STORE_NAME);
+    const request = store.put({
+      id: RESULT_RECORD_KEY,
+      value
+    });
+
+    request.onsuccess = () => {
+      clearLegacyResultStorage();
+      resolve();
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function openResultsDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(RESULT_DB_NAME, 1);
+
+    request.onupgradeneeded = () => {
+      const database = request.result;
+
+      if (!database.objectStoreNames.contains(RESULT_STORE_NAME)) {
+        database.createObjectStore(RESULT_STORE_NAME, {
+          keyPath: "id"
+        });
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function readLegacyResultStorage() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const savedResults = window.sessionStorage.getItem(RESULT_STORAGE_KEY);
+
+  if (!savedResults) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(savedResults);
+  } catch {
+    clearLegacyResultStorage();
+    return null;
+  }
+}
+
+function clearLegacyResultStorage() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.sessionStorage.removeItem(RESULT_STORAGE_KEY);
 }
