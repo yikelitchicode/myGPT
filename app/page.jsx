@@ -9,6 +9,7 @@ const RESULT_DB_NAME = "pocket-image-lab-results-db";
 const RESULT_STORE_NAME = "result-state";
 const RESULT_RECORD_KEY = "history";
 const WAIT_PROFILE_STORAGE_KEY = "pocket-image-lab-wait-profile";
+const REQUEST_TIMEOUT_MS = 55_000;
 const DEFAULT_WAIT_ESTIMATES = {
   generate: { low: 8, medium: 14, high: 22 },
   edit: { low: 12, medium: 20, high: 28 }
@@ -74,6 +75,7 @@ const COPY = {
     promptRequired: "請先輸入提示詞。",
     apiKeyRequired: "請輸入 API Key。",
     requestFailed: "請求失敗。",
+    timeoutFailed: "圖片服務逾時。請改用較低品質、減少參考圖，或更換 Base URL。",
     somethingWentWrong: "發生未預期錯誤。",
     sizeSquare: "正方形",
     sizeLandscape: "橫向",
@@ -142,6 +144,7 @@ const COPY = {
     promptRequired: "Please enter a prompt.",
     apiKeyRequired: "Please enter an API key.",
     requestFailed: "Request failed.",
+    timeoutFailed: "The image provider timed out. Try lower quality, fewer reference images, or another base URL.",
     somethingWentWrong: "Something went wrong.",
     sizeSquare: "Square",
     sizeLandscape: "Landscape",
@@ -341,6 +344,11 @@ export default function HomePage() {
       formData.append("referenceImage", image.file);
     });
 
+    const abortController = new AbortController();
+    const requestTimeout = window.setTimeout(() => {
+      abortController.abort();
+    }, REQUEST_TIMEOUT_MS);
+
     try {
       const response = await fetch("/api/generate", {
         method: "POST",
@@ -349,10 +357,11 @@ export default function HomePage() {
           "x-openai-base-url": baseURL,
           "x-openai-image-model": imageModel
         },
-        body: formData
+        body: formData,
+        signal: abortController.signal
       });
 
-      const payload = await response.json();
+      const payload = await readResponsePayload(response);
 
       if (!response.ok) {
         throw new Error(payload.error || t.requestFailed);
@@ -383,8 +392,23 @@ export default function HomePage() {
       setModel(payload.model || "");
       setStatus("success");
     } catch (submitError) {
-      setError(submitError.message || t.somethingWentWrong);
+      const message = String(submitError?.message || "");
+      const loweredMessage = message.toLowerCase();
+
+      if (
+        submitError?.name === "AbortError" ||
+        loweredMessage.includes("timed out") ||
+        loweredMessage.includes("timeout") ||
+        loweredMessage.includes("524")
+      ) {
+        setError(t.timeoutFailed);
+      } else {
+        setError(message || t.somethingWentWrong);
+      }
+
       setStatus("error");
+    } finally {
+      window.clearTimeout(requestTimeout);
     }
   }
 
@@ -892,6 +916,18 @@ function writeWaitProfile({ durationSeconds, quality, mode }) {
 
 function formatCopy(template, values) {
   return template.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? "");
+}
+
+async function readResponsePayload(response) {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+
+  return {
+    error: (await response.text()).trim()
+  };
 }
 
 function formatResultTime(timestamp, locale) {

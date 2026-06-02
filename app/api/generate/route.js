@@ -4,9 +4,56 @@ import { getImageModel, getOpenAIClient } from "@/lib/openai";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+const ALLOWED_SIZES = new Set(["1024x1024", "1536x1024", "1024x1536"]);
+const ALLOWED_QUALITIES = new Set(["low", "medium", "high"]);
+const ALLOWED_OUTPUT_FORMATS = new Set(["png", "jpeg", "webp"]);
+
 function toPositiveInteger(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readStringField(formData, key, fallback = "") {
+  const value = formData.get(key);
+
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const normalized = value.trim();
+  return normalized || fallback;
+}
+
+function readAllowedField(formData, key, allowedValues, fallback) {
+  const value = readStringField(formData, key, fallback);
+  return allowedValues.has(value) ? value : fallback;
+}
+
+function getErrorStatus(error) {
+  const status = Number(error?.status);
+  return Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500;
+}
+
+function getErrorMessage(error) {
+  const rawMessage =
+    error?.error?.message ||
+    error?.message ||
+    "Image generation failed.";
+  const normalizedMessage = String(rawMessage);
+  const loweredMessage = normalizedMessage.toLowerCase();
+  const status = getErrorStatus(error);
+
+  if (
+    status === 524 ||
+    loweredMessage.includes("524") ||
+    loweredMessage.includes("timed out") ||
+    loweredMessage.includes("timeout") ||
+    loweredMessage.includes("etimedout")
+  ) {
+    return "The upstream image provider timed out. Try lower quality, fewer reference images, or a faster base URL.";
+  }
+
+  return normalizedMessage;
 }
 
 export async function POST(request) {
@@ -15,10 +62,10 @@ export async function POST(request) {
     const baseURL = request.headers.get("x-openai-base-url")?.trim();
     const requestedModel = request.headers.get("x-openai-image-model")?.trim();
     const formData = await request.formData();
-    const prompt = formData.get("prompt")?.toString().trim();
-    const size = formData.get("size")?.toString() || "1024x1024";
-    const quality = formData.get("quality")?.toString() || "medium";
-    const outputFormat = formData.get("format")?.toString() || "png";
+    const prompt = readStringField(formData, "prompt");
+    const size = readAllowedField(formData, "size", ALLOWED_SIZES, "1024x1024");
+    const quality = readAllowedField(formData, "quality", ALLOWED_QUALITIES, "medium");
+    const outputFormat = readAllowedField(formData, "format", ALLOWED_OUTPUT_FORMATS, "png");
     const referenceImages = formData
       .getAll("referenceImage")
       .filter((value) => value instanceof File && value.size > 0)
@@ -69,11 +116,8 @@ export async function POST(request) {
       model
     });
   } catch (error) {
-    const status = error?.status || 500;
-    const message =
-      error?.error?.message ||
-      error?.message ||
-      "Image generation failed.";
+    const status = getErrorStatus(error);
+    const message = getErrorMessage(error);
 
     return NextResponse.json(
       {
