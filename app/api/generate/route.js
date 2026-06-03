@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getImageModel, getOpenAIClient } from "@/lib/openai";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const ALLOWED_SIZES = new Set(["1024x1024", "1536x1024", "1024x1536"]);
 const ALLOWED_QUALITIES = new Set(["low", "medium", "high"]);

@@ -9,10 +9,10 @@ const RESULT_DB_NAME = "pocket-image-lab-results-db";
 const RESULT_STORE_NAME = "result-state";
 const RESULT_RECORD_KEY = "history";
 const WAIT_PROFILE_STORAGE_KEY = "pocket-image-lab-wait-profile";
-const REQUEST_TIMEOUT_MS = 55_000;
+const REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_WAIT_ESTIMATES = {
-  generate: { low: 8, medium: 14, high: 22 },
-  edit: { low: 12, medium: 20, high: 28 }
+  generate: { low: 90, medium: 110, high: 120 },
+  edit: { low: 100, medium: 115, high: 120 }
 };
 
 const COPY = {
@@ -26,11 +26,14 @@ const COPY = {
     apiKey: "API Key",
     baseUrl: "Base URL",
     imageModel: "圖片模型",
+    requestRoute: "請求路徑",
+    routeProxy: "走 Vercel Proxy",
+    routeDirect: "直接打 Provider",
     startSession: "開始工作階段",
     howItWorksEyebrow: "運作方式",
     howItWorksTitle: "不共用伺服器金鑰",
     howItWorksBody: "你的 Vercel 應用不會保存全域 API Key。",
-    howItWorksMuted: "每次請求都使用你在本次工作階段輸入的金鑰，並透過伺服器路由轉發。",
+    howItWorksMuted: "每次請求都使用你在本次工作階段輸入的金鑰。若上游支援 CORS，可直接從前端呼叫，繞過 Vercel route。",
     sessionEyebrow: "Session Active",
     logOut: "登出",
     prompt: "提示詞",
@@ -76,6 +79,7 @@ const COPY = {
     apiKeyRequired: "請輸入 API Key。",
     requestFailed: "請求失敗。",
     timeoutFailed: "圖片服務逾時。請改用較低品質、減少參考圖，或更換 Base URL。",
+    corsFailed: "無法直接連到圖片服務。請確認上游已放行 CORS，或改回 Vercel Proxy。",
     somethingWentWrong: "發生未預期錯誤。",
     sizeSquare: "正方形",
     sizeLandscape: "橫向",
@@ -95,11 +99,14 @@ const COPY = {
     apiKey: "API key",
     baseUrl: "Base URL",
     imageModel: "Image model",
+    requestRoute: "Request route",
+    routeProxy: "Use Vercel proxy",
+    routeDirect: "Direct to provider",
     startSession: "Start session",
     howItWorksEyebrow: "How It Works",
     howItWorksTitle: "No shared server key",
     howItWorksBody: "Your Vercel app does not keep a global API key.",
-    howItWorksMuted: "Each request uses the key entered in this session and forwards it through the server route.",
+    howItWorksMuted: "Each request uses the key entered in this session. If the upstream allows CORS, the browser can call it directly and skip the Vercel route.",
     sessionEyebrow: "Session Active",
     logOut: "Log out",
     prompt: "Prompt",
@@ -145,6 +152,7 @@ const COPY = {
     apiKeyRequired: "Please enter an API key.",
     requestFailed: "Request failed.",
     timeoutFailed: "The image provider timed out. Try lower quality, fewer reference images, or another base URL.",
+    corsFailed: "Direct provider access failed. Confirm the upstream allows CORS, or switch back to the Vercel proxy.",
     somethingWentWrong: "Something went wrong.",
     sizeSquare: "Square",
     sizeLandscape: "Landscape",
@@ -161,6 +169,7 @@ export default function HomePage() {
   const [apiKey, setApiKey] = useState("");
   const [baseURL, setBaseURL] = useState("https://chickendog.cc/v1");
   const [imageModel, setImageModel] = useState("gpt-image-2");
+  const [useDirectProvider, setUseDirectProvider] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -235,6 +244,7 @@ export default function HomePage() {
             setApiKey(session.apiKey || "");
             setBaseURL(session.baseURL || "https://chickendog.cc/v1");
             setImageModel(session.imageModel || "gpt-image-2");
+            setUseDirectProvider(Boolean(session.useDirectProvider));
             setIsAuthenticated(Boolean(session.apiKey));
           }
         } catch {
@@ -350,16 +360,25 @@ export default function HomePage() {
     }, REQUEST_TIMEOUT_MS);
 
     try {
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        headers: {
-          "x-openai-api-key": apiKey,
-          "x-openai-base-url": baseURL,
-          "x-openai-image-model": imageModel
-        },
-        body: formData,
-        signal: abortController.signal
-      });
+      const response = useDirectProvider
+        ? await submitDirectImageRequest({
+            apiKey,
+            baseURL,
+            imageModel,
+            formData,
+            referenceImages,
+            signal: abortController.signal
+          })
+        : await fetch("/api/generate", {
+            method: "POST",
+            headers: {
+              "x-openai-api-key": apiKey,
+              "x-openai-base-url": baseURL,
+              "x-openai-image-model": imageModel
+            },
+            body: formData,
+            signal: abortController.signal
+          });
 
       const payload = await readResponsePayload(response);
 
@@ -402,6 +421,13 @@ export default function HomePage() {
         loweredMessage.includes("524")
       ) {
         setError(t.timeoutFailed);
+      } else if (
+        useDirectProvider &&
+        (submitError instanceof TypeError ||
+          loweredMessage.includes("failed to fetch") ||
+          loweredMessage.includes("cors"))
+      ) {
+        setError(t.corsFailed);
       } else {
         setError(message || t.somethingWentWrong);
       }
@@ -503,13 +529,15 @@ export default function HomePage() {
     const session = {
       apiKey: apiKey.trim(),
       baseURL: baseURL.trim() || "https://chickendog.cc/v1",
-      imageModel: imageModel.trim() || "gpt-image-2"
+      imageModel: imageModel.trim() || "gpt-image-2",
+      useDirectProvider
     };
 
     window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
     setApiKey(session.apiKey);
     setBaseURL(session.baseURL);
     setImageModel(session.imageModel);
+    setUseDirectProvider(session.useDirectProvider);
     setError("");
     setIsAuthenticated(true);
   }
@@ -519,6 +547,7 @@ export default function HomePage() {
     setApiKey("");
     setBaseURL("https://chickendog.cc/v1");
     setImageModel("gpt-image-2");
+    setUseDirectProvider(false);
     setPrompt("");
     referenceImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
     setReferenceImages([]);
@@ -644,6 +673,17 @@ export default function HomePage() {
               />
             </label>
 
+            <label className="field">
+              <span>{t.requestRoute}</span>
+              <select
+                value={useDirectProvider ? "direct" : "proxy"}
+                onChange={(event) => setUseDirectProvider(event.target.value === "direct")}
+              >
+                <option value="proxy">{t.routeProxy}</option>
+                <option value="direct">{t.routeDirect}</option>
+              </select>
+            </label>
+
             <button className="submit" type="submit">
               {t.startSession}
             </button>
@@ -671,6 +711,7 @@ export default function HomePage() {
               <div>
                 <p className="eyebrow">{t.sessionEyebrow}</p>
                 <p className="muted session-copy">{baseURL}</p>
+                <p className="muted session-copy">{useDirectProvider ? t.routeDirect : t.routeProxy}</p>
               </div>
               <button type="button" className="ghost" onClick={handleLogout}>
                 {t.logOut}
@@ -877,10 +918,21 @@ function readWaitProfiles() {
 
 function getEstimatedWaitSeconds({ quality, mode }) {
   const profiles = readWaitProfiles();
+  const fallback = DEFAULT_WAIT_ESTIMATES[mode]?.[quality] || DEFAULT_WAIT_ESTIMATES.generate.medium;
+  const storedAverage = profiles?.[mode]?.[quality]?.averageSeconds;
+
+  if (!storedAverage) {
+    return fallback;
+  }
+
+  // Ignore stale low estimates from older builds so the loading UI stays realistic.
+  if (storedAverage < fallback * 0.7) {
+    return fallback;
+  }
+
   return (
-    profiles?.[mode]?.[quality]?.averageSeconds ||
-    DEFAULT_WAIT_ESTIMATES[mode]?.[quality] ||
-    DEFAULT_WAIT_ESTIMATES.generate.medium
+    storedAverage ||
+    fallback
   );
 }
 
@@ -890,14 +942,17 @@ function writeWaitProfile({ durationSeconds, quality, mode }) {
   }
 
   const profiles = readWaitProfiles();
+  const fallback = DEFAULT_WAIT_ESTIMATES[mode]?.[quality] || DEFAULT_WAIT_ESTIMATES.generate.medium;
   const currentBucket = profiles?.[mode]?.[quality] || {
-    averageSeconds: DEFAULT_WAIT_ESTIMATES[mode]?.[quality] || DEFAULT_WAIT_ESTIMATES.generate.medium,
+    averageSeconds: fallback,
     sampleCount: 0
   };
+  const baselineAverageSeconds =
+    currentBucket.averageSeconds < fallback * 0.7 ? fallback : currentBucket.averageSeconds;
   const nextSampleCount = Math.min(currentBucket.sampleCount + 1, 12);
   const weight = Math.min(currentBucket.sampleCount, 11);
   const nextAverageSeconds = Math.round(
-    (currentBucket.averageSeconds * weight + durationSeconds) / nextSampleCount
+    (baselineAverageSeconds * weight + durationSeconds) / nextSampleCount
   );
 
   const nextProfiles = {
@@ -928,6 +983,60 @@ async function readResponsePayload(response) {
   return {
     error: (await response.text()).trim()
   };
+}
+
+async function submitDirectImageRequest({
+  apiKey,
+  baseURL,
+  imageModel,
+  formData,
+  referenceImages,
+  signal
+}) {
+  const normalizedBaseURL = baseURL.trim().replace(/\/+$/, "");
+  const endpoint = referenceImages.length ? "/images/edits" : "/images/generations";
+  const upstreamFormData = new FormData();
+
+  upstreamFormData.append("model", imageModel.trim() || "gpt-image-2");
+  upstreamFormData.append("prompt", String(formData.get("prompt") || "").trim());
+  upstreamFormData.append("size", String(formData.get("size") || "1024x1024"));
+  upstreamFormData.append("quality", String(formData.get("quality") || "medium"));
+  upstreamFormData.append("output_format", String(formData.get("format") || "png"));
+  upstreamFormData.append("n", String(formData.get("count") || "1"));
+
+  referenceImages.forEach((image) => {
+    upstreamFormData.append("image", image.file);
+  });
+
+  const response = await fetch(`${normalizedBaseURL}${endpoint}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey.trim()}`
+    },
+    body: upstreamFormData,
+    signal
+  });
+
+  if (!response.ok) {
+    return response;
+  }
+
+  const payload = await readResponsePayload(response);
+  const images = Array.isArray(payload.data) ? payload.data.map((item) => item?.b64_json).filter(Boolean) : [];
+
+  return new Response(
+    JSON.stringify({
+      images,
+      mode: referenceImages.length ? "edit" : "generate",
+      model: imageModel.trim() || "gpt-image-2"
+    }),
+    {
+      status: 200,
+      headers: {
+        "content-type": "application/json"
+      }
+    }
+  );
 }
 
 function formatResultTime(timestamp, locale) {

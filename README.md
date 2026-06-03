@@ -36,6 +36,8 @@ npm run dev
 
 ## Notes
 
-- The app uses a server-side API route, but the user-provided key is still sent through that route on each request. It is not persisted by the app, but it does traverse your Vercel function.
-- Vercel Hobby supports this pattern through serverless functions, but long-running image requests still count toward free-plan limits.
+- The app supports two request paths: the default Vercel proxy route and a browser-direct provider mode for upstreams that allow CORS.
+- In proxy mode, the user-provided key is still sent through the server route on each request. It is not persisted by the app, but it does traverse your Vercel function.
+- The proxy route currently allows up to 120 seconds for validation, but long-running image requests still count toward Vercel function limits.
+- A real job/polling flow still depends on the upstream image provider exposing an async job API. This repo's current OpenAI-compatible Images integration is synchronous.
 - Image generation compatibility depends on whether your chosen endpoint supports the OpenAI Images API.
