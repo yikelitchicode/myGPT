@@ -36,7 +36,8 @@ npm run dev
 
 ## Notes
 
-- The app validates the user-provided key through `/api/validate` and generates images through `/api/generate`, so the browser only talks to your own Vercel app.
+- The app stores the user-provided key in the current browser session and sends generation requests through `/api/generate`, so the browser only talks to your own Vercel app.
 - Generated images are returned as base64 payloads from the server route and rendered directly in the page.
-- Your provider does not need browser CORS enabled for this flow, but it still needs to support the OpenAI-compatible Models and Images APIs.
+- Your provider does not need browser CORS enabled for this flow, but it still needs to support the OpenAI-compatible Images API.
+- Some image-only providers support `gpt-image-2` on `/v1/images/generations` and `/v1/images/edits` without supporting `/v1/models`, so this app does not block login on a `/models` validation step.
 - A real job/polling flow still depends on the upstream image provider exposing an async job API. This repo's current Images integration is synchronous.

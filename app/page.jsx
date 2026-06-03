@@ -27,7 +27,6 @@ const COPY = {
     baseUrl: "Base URL",
     imageModel: "圖片模型",
     startSession: "開始工作階段",
-    validatingSession: "驗證金鑰中...",
     howItWorksEyebrow: "運作方式",
     howItWorksTitle: "不共用伺服器金鑰",
     howItWorksBody: "你的 Vercel 應用不會保存全域 API Key。",
@@ -77,9 +76,8 @@ const COPY = {
     apiKeyRequired: "請輸入 API Key。",
     baseUrlRequired: "請輸入 Base URL。",
     requestFailed: "請求失敗。",
-    invalidApiKey: "API Key 無效，或這個 Base URL 不支援模型驗證。",
+    invalidApiKey: "API Key 無效，或圖片服務拒絕了這次請求。",
     timeoutFailed: "圖片服務逾時。請改用較低品質、減少參考圖，或更換 Base URL。",
-    loginTimeoutFailed: "驗證金鑰逾時。請檢查 Base URL 或稍後再試。",
     somethingWentWrong: "發生未預期錯誤。",
     sizeSquare: "正方形",
     sizeLandscape: "橫向",
@@ -100,7 +98,6 @@ const COPY = {
     baseUrl: "Base URL",
     imageModel: "Image model",
     startSession: "Start session",
-    validatingSession: "Validating key...",
     howItWorksEyebrow: "How It Works",
     howItWorksTitle: "No shared server key",
     howItWorksBody: "Your Vercel app does not keep a global API key.",
@@ -150,9 +147,8 @@ const COPY = {
     apiKeyRequired: "Please enter an API key.",
     baseUrlRequired: "Please enter a base URL.",
     requestFailed: "Request failed.",
-    invalidApiKey: "The API key is invalid, or this base URL does not support model validation.",
+    invalidApiKey: "The API key is invalid, or the image provider rejected the request.",
     timeoutFailed: "The image provider timed out. Try lower quality, fewer reference images, or another base URL.",
-    loginTimeoutFailed: "Key validation timed out. Check the base URL or try again later.",
     somethingWentWrong: "Something went wrong.",
     sizeSquare: "Square",
     sizeLandscape: "Landscape",
@@ -171,7 +167,6 @@ export default function HomePage() {
   const [imageModel, setImageModel] = useState("gpt-image-2");
   const [isReady, setIsReady] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isSigningIn, setIsSigningIn] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState("1024x1024");
   const [quality, setQuality] = useState("medium");
@@ -501,7 +496,7 @@ export default function HomePage() {
     });
   }
 
-  async function handleLogin(event) {
+  function handleLogin(event) {
     event.preventDefault();
 
     if (!apiKey.trim()) {
@@ -514,50 +509,18 @@ export default function HomePage() {
       return;
     }
 
-    setIsSigningIn(true);
+    const session = {
+      apiKey: apiKey.trim(),
+      baseURL: baseURL.trim() || "https://chickendog.cc/v1",
+      imageModel: imageModel.trim() || "gpt-image-2"
+    };
+
+    window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    setApiKey(session.apiKey);
+    setBaseURL(session.baseURL);
+    setImageModel(session.imageModel);
     setError("");
-
-    const abortController = new AbortController();
-    const requestTimeout = window.setTimeout(() => {
-      abortController.abort();
-    }, 20_000);
-
-    try {
-      await validateSessionCredentials({
-        apiKey,
-        baseURL,
-        signal: abortController.signal
-      });
-
-      const session = {
-        apiKey: apiKey.trim(),
-        baseURL: baseURL.trim() || "https://chickendog.cc/v1",
-        imageModel: imageModel.trim() || "gpt-image-2"
-      };
-
-      window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-      setApiKey(session.apiKey);
-      setBaseURL(session.baseURL);
-      setImageModel(session.imageModel);
-      setError("");
-      setIsAuthenticated(true);
-    } catch (loginError) {
-      const message = String(loginError?.message || "");
-      const loweredMessage = message.toLowerCase();
-
-      if (
-        loginError?.name === "AbortError" ||
-        loweredMessage.includes("timed out") ||
-        loweredMessage.includes("timeout")
-      ) {
-        setError(t.loginTimeoutFailed);
-      } else {
-        setError(message || t.invalidApiKey);
-      }
-    } finally {
-      window.clearTimeout(requestTimeout);
-      setIsSigningIn(false);
-    }
+    setIsAuthenticated(true);
   }
 
   function handleLogout() {
@@ -690,8 +653,8 @@ export default function HomePage() {
               />
             </label>
 
-            <button className="submit" type="submit" disabled={isSigningIn}>
-              {isSigningIn ? t.validatingSession : t.startSession}
+            <button className="submit" type="submit">
+              {t.startSession}
             </button>
 
             {error ? <p className="message error">{error}</p> : null}
@@ -988,31 +951,6 @@ async function readResponsePayload(response) {
   return {
     error: (await response.text()).trim()
   };
-}
-
-async function validateSessionCredentials({ apiKey, baseURL, signal }) {
-  const response = await fetch("/api/validate", {
-    method: "GET",
-    headers: {
-      "x-openai-api-key": apiKey.trim(),
-      "x-openai-base-url": baseURL.trim()
-    },
-    signal
-  });
-
-  if (response.ok) {
-    return;
-  }
-
-  const payload = await readResponsePayload(response);
-  const status = response.status;
-  const message = String(payload?.error?.message || payload?.error || "").trim();
-
-  if (status === 401 || status === 403) {
-    throw new Error("Invalid API key.");
-  }
-
-  throw new Error(message || "Unable to validate this API key.");
 }
 
 function formatResultTime(timestamp, locale) {

@@ -34,6 +34,10 @@ function getErrorStatus(error) {
   return Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500;
 }
 
+function sanitizeBaseURL(baseURL) {
+  return baseURL?.trim() || "https://chickendog.cc/v1";
+}
+
 function getErrorMessage(error) {
   const rawMessage = error?.error?.message || error?.message || "Image generation failed.";
   const normalizedMessage = String(rawMessage);
@@ -54,6 +58,8 @@ function getErrorMessage(error) {
 }
 
 export async function POST(request) {
+  const startedAt = Date.now();
+
   try {
     const apiKey = request.headers.get("x-openai-api-key")?.trim();
     const baseURL = request.headers.get("x-openai-base-url")?.trim();
@@ -77,8 +83,21 @@ export async function POST(request) {
       return NextResponse.json({ error: "Missing API key." }, { status: 401 });
     }
 
-    const client = getOpenAIClient({ apiKey, baseURL });
+    const normalizedBaseURL = sanitizeBaseURL(baseURL);
+    const client = getOpenAIClient({ apiKey, baseURL: normalizedBaseURL });
     const model = getImageModel(requestedModel);
+    const mode = referenceImages.length > 0 ? "edit" : "generate";
+
+    console.info("[api/generate] start", {
+      mode,
+      baseURL: normalizedBaseURL,
+      model,
+      size,
+      quality,
+      outputFormat,
+      referenceImageCount: referenceImages.length,
+      numberOfImages
+    });
 
     if (referenceImages.length > 0) {
       const result = await client.images.edit({
@@ -89,6 +108,14 @@ export async function POST(request) {
         quality,
         output_format: outputFormat,
         n: numberOfImages
+      });
+
+      console.info("[api/generate] success", {
+        mode,
+        baseURL: normalizedBaseURL,
+        model,
+        imageCount: (result.data || []).length,
+        durationMs: Date.now() - startedAt
       });
 
       return NextResponse.json({
@@ -107,6 +134,14 @@ export async function POST(request) {
       n: numberOfImages
     });
 
+    console.info("[api/generate] success", {
+      mode,
+      baseURL: normalizedBaseURL,
+      model,
+      imageCount: (result.data || []).length,
+      durationMs: Date.now() - startedAt
+    });
+
     return NextResponse.json({
       images: (result.data || []).map((item) => item.b64_json).filter(Boolean),
       mode: "generate",
@@ -115,6 +150,15 @@ export async function POST(request) {
   } catch (error) {
     const status = getErrorStatus(error);
     const message = getErrorMessage(error);
+
+    console.error("[api/generate] failure", {
+      status,
+      message,
+      upstreamStatus: error?.status ?? null,
+      upstreamCode: error?.code ?? null,
+      upstreamType: error?.type ?? null,
+      durationMs: Date.now() - startedAt
+    });
 
     return NextResponse.json({ error: message }, { status });
   }
