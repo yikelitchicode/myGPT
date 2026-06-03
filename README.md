@@ -36,6 +36,7 @@ npm run dev
 
 ## Notes
 
-- The app now validates the user-provided key against `GET /models` and then calls the configured image provider directly from the browser.
-- Your provider must allow browser CORS requests and support the OpenAI-compatible Images API endpoints.
+- The app validates the user-provided key through `/api/validate` and generates images through `/api/generate`, so the browser only talks to your own Vercel app.
+- Generated images are returned as base64 payloads from the server route and rendered directly in the page.
+- Your provider does not need browser CORS enabled for this flow, but it still needs to support the OpenAI-compatible Models and Images APIs.
 - A real job/polling flow still depends on the upstream image provider exposing an async job API. This repo's current Images integration is synchronous.

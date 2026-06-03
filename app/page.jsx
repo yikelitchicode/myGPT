@@ -31,7 +31,7 @@ const COPY = {
     howItWorksEyebrow: "運作方式",
     howItWorksTitle: "不共用伺服器金鑰",
     howItWorksBody: "你的 Vercel 應用不會保存全域 API Key。",
-    howItWorksMuted: "每次請求都使用你在本次工作階段輸入的金鑰，直接從前端呼叫你提供的圖片服務。",
+    howItWorksMuted: "每次請求都使用你在本次工作階段輸入的金鑰，並由本站伺服器代為轉發到你提供的圖片服務。",
     sessionEyebrow: "Session Active",
     logOut: "登出",
     prompt: "提示詞",
@@ -77,9 +77,8 @@ const COPY = {
     apiKeyRequired: "請輸入 API Key。",
     baseUrlRequired: "請輸入 Base URL。",
     requestFailed: "請求失敗。",
-    invalidApiKey: "API Key 無效，或這個 Base URL 不支援 /models 驗證。",
+    invalidApiKey: "API Key 無效，或這個 Base URL 不支援模型驗證。",
     timeoutFailed: "圖片服務逾時。請改用較低品質、減少參考圖，或更換 Base URL。",
-    corsFailed: "無法直接連到圖片服務。請確認上游已放行 CORS。",
     loginTimeoutFailed: "驗證金鑰逾時。請檢查 Base URL 或稍後再試。",
     somethingWentWrong: "發生未預期錯誤。",
     sizeSquare: "正方形",
@@ -105,7 +104,7 @@ const COPY = {
     howItWorksEyebrow: "How It Works",
     howItWorksTitle: "No shared server key",
     howItWorksBody: "Your Vercel app does not keep a global API key.",
-    howItWorksMuted: "Each request uses the key entered in this session and calls your configured image provider directly from the browser.",
+    howItWorksMuted: "Each request uses the key entered in this session and is forwarded by this app to your configured image provider.",
     sessionEyebrow: "Session Active",
     logOut: "Log out",
     prompt: "Prompt",
@@ -151,9 +150,8 @@ const COPY = {
     apiKeyRequired: "Please enter an API key.",
     baseUrlRequired: "Please enter a base URL.",
     requestFailed: "Request failed.",
-    invalidApiKey: "The API key is invalid, or this base URL does not support /models validation.",
+    invalidApiKey: "The API key is invalid, or this base URL does not support model validation.",
     timeoutFailed: "The image provider timed out. Try lower quality, fewer reference images, or another base URL.",
-    corsFailed: "Direct provider access failed. Confirm the upstream allows CORS.",
     loginTimeoutFailed: "Key validation timed out. Check the base URL or try again later.",
     somethingWentWrong: "Something went wrong.",
     sizeSquare: "Square",
@@ -361,12 +359,14 @@ export default function HomePage() {
     }, REQUEST_TIMEOUT_MS);
 
     try {
-      const response = await submitDirectImageRequest({
-        apiKey,
-        baseURL,
-        imageModel,
-        formData,
-        referenceImages,
+      const response = await fetch("/api/generate", {
+        method: "POST",
+        headers: {
+          "x-openai-api-key": apiKey,
+          "x-openai-base-url": baseURL,
+          "x-openai-image-model": imageModel
+        },
+        body: formData,
         signal: abortController.signal
       });
 
@@ -411,12 +411,6 @@ export default function HomePage() {
         loweredMessage.includes("524")
       ) {
         setError(t.timeoutFailed);
-      } else if (
-        submitError instanceof TypeError ||
-        loweredMessage.includes("failed to fetch") ||
-        loweredMessage.includes("cors")
-      ) {
-        setError(t.corsFailed);
       } else {
         setError(message || t.somethingWentWrong);
       }
@@ -557,12 +551,6 @@ export default function HomePage() {
         loweredMessage.includes("timeout")
       ) {
         setError(t.loginTimeoutFailed);
-      } else if (
-        loginError instanceof TypeError ||
-        loweredMessage.includes("failed to fetch") ||
-        loweredMessage.includes("cors")
-      ) {
-        setError(t.corsFailed);
       } else {
         setError(message || t.invalidApiKey);
       }
@@ -1002,66 +990,12 @@ async function readResponsePayload(response) {
   };
 }
 
-async function submitDirectImageRequest({
-  apiKey,
-  baseURL,
-  imageModel,
-  formData,
-  referenceImages,
-  signal
-}) {
-  const normalizedBaseURL = baseURL.trim().replace(/\/+$/, "");
-  const endpoint = referenceImages.length ? "/images/edits" : "/images/generations";
-  const upstreamFormData = new FormData();
-
-  upstreamFormData.append("model", imageModel.trim() || "gpt-image-2");
-  upstreamFormData.append("prompt", String(formData.get("prompt") || "").trim());
-  upstreamFormData.append("size", String(formData.get("size") || "1024x1024"));
-  upstreamFormData.append("quality", String(formData.get("quality") || "medium"));
-  upstreamFormData.append("output_format", String(formData.get("format") || "png"));
-  upstreamFormData.append("n", String(formData.get("count") || "1"));
-
-  referenceImages.forEach((image) => {
-    upstreamFormData.append("image", image.file);
-  });
-
-  const response = await fetch(`${normalizedBaseURL}${endpoint}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey.trim()}`
-    },
-    body: upstreamFormData,
-    signal
-  });
-
-  if (!response.ok) {
-    return response;
-  }
-
-  const payload = await readResponsePayload(response);
-  const images = Array.isArray(payload.data) ? payload.data.map((item) => item?.b64_json).filter(Boolean) : [];
-
-  return new Response(
-    JSON.stringify({
-      images,
-      mode: referenceImages.length ? "edit" : "generate",
-      model: imageModel.trim() || "gpt-image-2"
-    }),
-    {
-      status: 200,
-      headers: {
-        "content-type": "application/json"
-      }
-    }
-  );
-}
-
 async function validateSessionCredentials({ apiKey, baseURL, signal }) {
-  const normalizedBaseURL = baseURL.trim().replace(/\/+$/, "");
-  const response = await fetch(`${normalizedBaseURL}/models`, {
+  const response = await fetch("/api/validate", {
     method: "GET",
     headers: {
-      Authorization: `Bearer ${apiKey.trim()}`
+      "x-openai-api-key": apiKey.trim(),
+      "x-openai-base-url": baseURL.trim()
     },
     signal
   });
@@ -1078,11 +1012,7 @@ async function validateSessionCredentials({ apiKey, baseURL, signal }) {
     throw new Error("Invalid API key.");
   }
 
-  if (status === 404) {
-    throw new Error("This base URL does not expose GET /models.");
-  }
-
-  throw new Error(message || "Unable to validate this API key against GET /models.");
+  throw new Error(message || "Unable to validate this API key.");
 }
 
 function formatResultTime(timestamp, locale) {
