@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getImageModel, getOpenAIClient } from "@/lib/openai";
+import { getImageModel } from "@/lib/openai";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -57,6 +57,94 @@ function getErrorMessage(error) {
   return normalizedMessage;
 }
 
+async function readUpstreamPayload(response) {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+
+  return {
+    error: (await response.text()).trim() || `Upstream returned ${response.status}.`
+  };
+}
+
+function getUpstreamErrorMessage(payload, fallback) {
+  if (typeof payload?.error === "string" && payload.error.trim()) {
+    return payload.error.trim();
+  }
+
+  if (typeof payload?.error?.message === "string" && payload.error.message.trim()) {
+    return payload.error.message.trim();
+  }
+
+  return fallback;
+}
+
+async function callImageGeneration({
+  apiKey,
+  normalizedBaseURL,
+  model,
+  prompt,
+  size,
+  quality,
+  outputFormat,
+  numberOfImages,
+  signal
+}) {
+  return fetch(`${normalizedBaseURL}/images/generations`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model,
+      prompt,
+      size,
+      quality,
+      output_format: outputFormat,
+      n: numberOfImages
+    }),
+    signal
+  });
+}
+
+async function callImageEdit({
+  apiKey,
+  normalizedBaseURL,
+  model,
+  prompt,
+  size,
+  quality,
+  outputFormat,
+  numberOfImages,
+  referenceImages,
+  signal
+}) {
+  const upstreamFormData = new FormData();
+
+  upstreamFormData.append("model", model);
+  upstreamFormData.append("prompt", prompt);
+  upstreamFormData.append("size", size);
+  upstreamFormData.append("quality", quality);
+  upstreamFormData.append("output_format", outputFormat);
+  upstreamFormData.append("n", String(numberOfImages));
+
+  referenceImages.forEach((image) => {
+    upstreamFormData.append("image", image);
+  });
+
+  return fetch(`${normalizedBaseURL}/images/edits`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: upstreamFormData,
+    signal
+  });
+}
+
 export async function POST(request) {
   const startedAt = Date.now();
 
@@ -84,7 +172,6 @@ export async function POST(request) {
     }
 
     const normalizedBaseURL = sanitizeBaseURL(baseURL);
-    const client = getOpenAIClient({ apiKey, baseURL: normalizedBaseURL });
     const model = getImageModel(requestedModel);
     const mode = referenceImages.length > 0 ? "edit" : "generate";
 
@@ -99,52 +186,59 @@ export async function POST(request) {
       numberOfImages
     });
 
-    if (referenceImages.length > 0) {
-      const result = await client.images.edit({
-        model,
-        image: referenceImages.length === 1 ? referenceImages[0] : referenceImages,
-        prompt,
-        size,
-        quality,
-        output_format: outputFormat,
-        n: numberOfImages
-      });
+    const upstreamResponse = referenceImages.length
+      ? await callImageEdit({
+          apiKey,
+          normalizedBaseURL,
+          model,
+          prompt,
+          size,
+          quality,
+          outputFormat,
+          numberOfImages,
+          referenceImages,
+          signal: request.signal
+        })
+      : await callImageGeneration({
+          apiKey,
+          normalizedBaseURL,
+          model,
+          prompt,
+          size,
+          quality,
+          outputFormat,
+          numberOfImages,
+          signal: request.signal
+        });
 
-      console.info("[api/generate] success", {
-        mode,
-        baseURL: normalizedBaseURL,
-        model,
-        imageCount: (result.data || []).length,
-        durationMs: Date.now() - startedAt
-      });
+    const payload = await readUpstreamPayload(upstreamResponse);
 
-      return NextResponse.json({
-        images: (result.data || []).map((item) => item.b64_json).filter(Boolean),
-        mode: "edit",
-        model
-      });
+    if (!upstreamResponse.ok) {
+      const message = getUpstreamErrorMessage(
+        payload,
+        `Upstream returned ${upstreamResponse.status}.`
+      );
+      const error = new Error(message);
+      error.status = upstreamResponse.status;
+      error.payload = payload;
+      throw error;
     }
 
-    const result = await client.images.generate({
-      model,
-      prompt,
-      size,
-      quality,
-      output_format: outputFormat,
-      n: numberOfImages
-    });
+    const images = Array.isArray(payload?.data)
+      ? payload.data.map((item) => item?.b64_json).filter(Boolean)
+      : [];
 
     console.info("[api/generate] success", {
       mode,
       baseURL: normalizedBaseURL,
       model,
-      imageCount: (result.data || []).length,
+      imageCount: images.length,
       durationMs: Date.now() - startedAt
     });
 
     return NextResponse.json({
-      images: (result.data || []).map((item) => item.b64_json).filter(Boolean),
-      mode: "generate",
+      images,
+      mode,
       model
     });
   } catch (error) {
@@ -157,6 +251,7 @@ export async function POST(request) {
       upstreamStatus: error?.status ?? null,
       upstreamCode: error?.code ?? null,
       upstreamType: error?.type ?? null,
+      upstreamPayload: error?.payload ?? null,
       durationMs: Date.now() - startedAt
     });
 
