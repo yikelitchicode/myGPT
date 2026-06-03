@@ -36,8 +36,6 @@ npm run dev
 
 ## Notes
 
-- The app supports two request paths: the default Vercel proxy route and a browser-direct provider mode for upstreams that allow CORS.
-- In proxy mode, the user-provided key is still sent through the server route on each request. It is not persisted by the app, but it does traverse your Vercel function.
-- The proxy route currently allows up to 120 seconds for validation, but long-running image requests still count toward Vercel function limits.
-- A real job/polling flow still depends on the upstream image provider exposing an async job API. This repo's current OpenAI-compatible Images integration is synchronous.
-- Image generation compatibility depends on whether your chosen endpoint supports the OpenAI Images API.
+- The app now validates the user-provided key against `GET /models` and then calls the configured image provider directly from the browser.
+- Your provider must allow browser CORS requests and support the OpenAI-compatible Images API endpoints.
+- A real job/polling flow still depends on the upstream image provider exposing an async job API. This repo's current Images integration is synchronous.

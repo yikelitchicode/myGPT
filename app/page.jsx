@@ -26,14 +26,12 @@ const COPY = {
     apiKey: "API Key",
     baseUrl: "Base URL",
     imageModel: "圖片模型",
-    requestRoute: "請求路徑",
-    routeProxy: "走 Vercel Proxy",
-    routeDirect: "直接打 Provider",
     startSession: "開始工作階段",
+    validatingSession: "驗證金鑰中...",
     howItWorksEyebrow: "運作方式",
     howItWorksTitle: "不共用伺服器金鑰",
     howItWorksBody: "你的 Vercel 應用不會保存全域 API Key。",
-    howItWorksMuted: "每次請求都使用你在本次工作階段輸入的金鑰。若上游支援 CORS，可直接從前端呼叫，繞過 Vercel route。",
+    howItWorksMuted: "每次請求都使用你在本次工作階段輸入的金鑰，直接從前端呼叫你提供的圖片服務。",
     sessionEyebrow: "Session Active",
     logOut: "登出",
     prompt: "提示詞",
@@ -77,9 +75,12 @@ const COPY = {
     hiddenBody: "你剛剛清除了目前顯示結果，但歷史照片還保留在這個工作階段中。",
     promptRequired: "請先輸入提示詞。",
     apiKeyRequired: "請輸入 API Key。",
+    baseUrlRequired: "請輸入 Base URL。",
     requestFailed: "請求失敗。",
+    invalidApiKey: "API Key 無效，或這個 Base URL 不支援 /models 驗證。",
     timeoutFailed: "圖片服務逾時。請改用較低品質、減少參考圖，或更換 Base URL。",
-    corsFailed: "無法直接連到圖片服務。請確認上游已放行 CORS，或改回 Vercel Proxy。",
+    corsFailed: "無法直接連到圖片服務。請確認上游已放行 CORS。",
+    loginTimeoutFailed: "驗證金鑰逾時。請檢查 Base URL 或稍後再試。",
     somethingWentWrong: "發生未預期錯誤。",
     sizeSquare: "正方形",
     sizeLandscape: "橫向",
@@ -99,14 +100,12 @@ const COPY = {
     apiKey: "API key",
     baseUrl: "Base URL",
     imageModel: "Image model",
-    requestRoute: "Request route",
-    routeProxy: "Use Vercel proxy",
-    routeDirect: "Direct to provider",
     startSession: "Start session",
+    validatingSession: "Validating key...",
     howItWorksEyebrow: "How It Works",
     howItWorksTitle: "No shared server key",
     howItWorksBody: "Your Vercel app does not keep a global API key.",
-    howItWorksMuted: "Each request uses the key entered in this session. If the upstream allows CORS, the browser can call it directly and skip the Vercel route.",
+    howItWorksMuted: "Each request uses the key entered in this session and calls your configured image provider directly from the browser.",
     sessionEyebrow: "Session Active",
     logOut: "Log out",
     prompt: "Prompt",
@@ -150,9 +149,12 @@ const COPY = {
     hiddenBody: "The visible result was cleared, but your recent images are still kept in this session.",
     promptRequired: "Please enter a prompt.",
     apiKeyRequired: "Please enter an API key.",
+    baseUrlRequired: "Please enter a base URL.",
     requestFailed: "Request failed.",
+    invalidApiKey: "The API key is invalid, or this base URL does not support /models validation.",
     timeoutFailed: "The image provider timed out. Try lower quality, fewer reference images, or another base URL.",
-    corsFailed: "Direct provider access failed. Confirm the upstream allows CORS, or switch back to the Vercel proxy.",
+    corsFailed: "Direct provider access failed. Confirm the upstream allows CORS.",
+    loginTimeoutFailed: "Key validation timed out. Check the base URL or try again later.",
     somethingWentWrong: "Something went wrong.",
     sizeSquare: "Square",
     sizeLandscape: "Landscape",
@@ -169,9 +171,9 @@ export default function HomePage() {
   const [apiKey, setApiKey] = useState("");
   const [baseURL, setBaseURL] = useState("https://chickendog.cc/v1");
   const [imageModel, setImageModel] = useState("gpt-image-2");
-  const [useDirectProvider, setUseDirectProvider] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isSigningIn, setIsSigningIn] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState("1024x1024");
   const [quality, setQuality] = useState("medium");
@@ -244,8 +246,7 @@ export default function HomePage() {
             setApiKey(session.apiKey || "");
             setBaseURL(session.baseURL || "https://chickendog.cc/v1");
             setImageModel(session.imageModel || "gpt-image-2");
-            setUseDirectProvider(Boolean(session.useDirectProvider));
-            setIsAuthenticated(Boolean(session.apiKey));
+            setIsAuthenticated(false);
           }
         } catch {
           window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
@@ -360,25 +361,14 @@ export default function HomePage() {
     }, REQUEST_TIMEOUT_MS);
 
     try {
-      const response = useDirectProvider
-        ? await submitDirectImageRequest({
-            apiKey,
-            baseURL,
-            imageModel,
-            formData,
-            referenceImages,
-            signal: abortController.signal
-          })
-        : await fetch("/api/generate", {
-            method: "POST",
-            headers: {
-              "x-openai-api-key": apiKey,
-              "x-openai-base-url": baseURL,
-              "x-openai-image-model": imageModel
-            },
-            body: formData,
-            signal: abortController.signal
-          });
+      const response = await submitDirectImageRequest({
+        apiKey,
+        baseURL,
+        imageModel,
+        formData,
+        referenceImages,
+        signal: abortController.signal
+      });
 
       const payload = await readResponsePayload(response);
 
@@ -422,10 +412,9 @@ export default function HomePage() {
       ) {
         setError(t.timeoutFailed);
       } else if (
-        useDirectProvider &&
-        (submitError instanceof TypeError ||
-          loweredMessage.includes("failed to fetch") ||
-          loweredMessage.includes("cors"))
+        submitError instanceof TypeError ||
+        loweredMessage.includes("failed to fetch") ||
+        loweredMessage.includes("cors")
       ) {
         setError(t.corsFailed);
       } else {
@@ -518,7 +507,7 @@ export default function HomePage() {
     });
   }
 
-  function handleLogin(event) {
+  async function handleLogin(event) {
     event.preventDefault();
 
     if (!apiKey.trim()) {
@@ -526,20 +515,61 @@ export default function HomePage() {
       return;
     }
 
-    const session = {
-      apiKey: apiKey.trim(),
-      baseURL: baseURL.trim() || "https://chickendog.cc/v1",
-      imageModel: imageModel.trim() || "gpt-image-2",
-      useDirectProvider
-    };
+    if (!baseURL.trim()) {
+      setError(t.baseUrlRequired);
+      return;
+    }
 
-    window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-    setApiKey(session.apiKey);
-    setBaseURL(session.baseURL);
-    setImageModel(session.imageModel);
-    setUseDirectProvider(session.useDirectProvider);
+    setIsSigningIn(true);
     setError("");
-    setIsAuthenticated(true);
+
+    const abortController = new AbortController();
+    const requestTimeout = window.setTimeout(() => {
+      abortController.abort();
+    }, 20_000);
+
+    try {
+      await validateSessionCredentials({
+        apiKey,
+        baseURL,
+        signal: abortController.signal
+      });
+
+      const session = {
+        apiKey: apiKey.trim(),
+        baseURL: baseURL.trim() || "https://chickendog.cc/v1",
+        imageModel: imageModel.trim() || "gpt-image-2"
+      };
+
+      window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+      setApiKey(session.apiKey);
+      setBaseURL(session.baseURL);
+      setImageModel(session.imageModel);
+      setError("");
+      setIsAuthenticated(true);
+    } catch (loginError) {
+      const message = String(loginError?.message || "");
+      const loweredMessage = message.toLowerCase();
+
+      if (
+        loginError?.name === "AbortError" ||
+        loweredMessage.includes("timed out") ||
+        loweredMessage.includes("timeout")
+      ) {
+        setError(t.loginTimeoutFailed);
+      } else if (
+        loginError instanceof TypeError ||
+        loweredMessage.includes("failed to fetch") ||
+        loweredMessage.includes("cors")
+      ) {
+        setError(t.corsFailed);
+      } else {
+        setError(message || t.invalidApiKey);
+      }
+    } finally {
+      window.clearTimeout(requestTimeout);
+      setIsSigningIn(false);
+    }
   }
 
   function handleLogout() {
@@ -547,7 +577,6 @@ export default function HomePage() {
     setApiKey("");
     setBaseURL("https://chickendog.cc/v1");
     setImageModel("gpt-image-2");
-    setUseDirectProvider(false);
     setPrompt("");
     referenceImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
     setReferenceImages([]);
@@ -673,19 +702,8 @@ export default function HomePage() {
               />
             </label>
 
-            <label className="field">
-              <span>{t.requestRoute}</span>
-              <select
-                value={useDirectProvider ? "direct" : "proxy"}
-                onChange={(event) => setUseDirectProvider(event.target.value === "direct")}
-              >
-                <option value="proxy">{t.routeProxy}</option>
-                <option value="direct">{t.routeDirect}</option>
-              </select>
-            </label>
-
-            <button className="submit" type="submit">
-              {t.startSession}
+            <button className="submit" type="submit" disabled={isSigningIn}>
+              {isSigningIn ? t.validatingSession : t.startSession}
             </button>
 
             {error ? <p className="message error">{error}</p> : null}
@@ -711,7 +729,6 @@ export default function HomePage() {
               <div>
                 <p className="eyebrow">{t.sessionEyebrow}</p>
                 <p className="muted session-copy">{baseURL}</p>
-                <p className="muted session-copy">{useDirectProvider ? t.routeDirect : t.routeProxy}</p>
               </div>
               <button type="button" className="ghost" onClick={handleLogout}>
                 {t.logOut}
@@ -1037,6 +1054,35 @@ async function submitDirectImageRequest({
       }
     }
   );
+}
+
+async function validateSessionCredentials({ apiKey, baseURL, signal }) {
+  const normalizedBaseURL = baseURL.trim().replace(/\/+$/, "");
+  const response = await fetch(`${normalizedBaseURL}/models`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${apiKey.trim()}`
+    },
+    signal
+  });
+
+  if (response.ok) {
+    return;
+  }
+
+  const payload = await readResponsePayload(response);
+  const status = response.status;
+  const message = String(payload?.error?.message || payload?.error || "").trim();
+
+  if (status === 401 || status === 403) {
+    throw new Error("Invalid API key.");
+  }
+
+  if (status === 404) {
+    throw new Error("This base URL does not expose GET /models.");
+  }
+
+  throw new Error(message || "Unable to validate this API key against GET /models.");
 }
 
 function formatResultTime(timestamp, locale) {
