@@ -10,6 +10,8 @@ const RESULT_STORE_NAME = "result-state";
 const RESULT_RECORD_KEY = "history";
 const WAIT_PROFILE_STORAGE_KEY = "pocket-image-lab-wait-profile";
 const REQUEST_TIMEOUT_MS = 120_000;
+const JOB_POLL_INTERVAL_MS = 2_500;
+const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 const DEFAULT_WAIT_ESTIMATES = {
   generate: { low: 90, medium: 110, high: 120 },
   edit: { low: 100, medium: 115, high: 120 }
@@ -60,8 +62,6 @@ const COPY = {
     emptyBody: "不寫入資料庫、沒有帳號狀態。圖片歷史只保留在這個分頁的工作階段中。",
     loadingTitle: "正在生成圖片",
     loadingBody: "請稍候，伺服器正在處理你的請求。",
-    estimatedTotal: "預計等待",
-    estimatedRemaining: "預估剩餘",
     elapsed: "已等待",
     seconds: "秒",
     clearCurrent: "清除目前照片",
@@ -131,8 +131,6 @@ const COPY = {
     emptyBody: "No database and no account state. Image history stays only for this tab session.",
     loadingTitle: "Generating image",
     loadingBody: "Please wait while the server completes your request.",
-    estimatedTotal: "Estimated total",
-    estimatedRemaining: "Est. remaining",
     elapsed: "Elapsed",
     seconds: "sec",
     clearCurrent: "Clear current image",
@@ -164,7 +162,7 @@ export default function HomePage() {
   const [locale, setLocale] = useState("zh-Hant");
   const [apiKey, setApiKey] = useState("");
   const [baseURL, setBaseURL] = useState("https://chickendog.cc/v1");
-  const [imageModel, setImageModel] = useState("gpt-image-2");
+  const [imageModel, setImageModel] = useState(DEFAULT_IMAGE_MODEL);
   const [isReady, setIsReady] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -238,7 +236,7 @@ export default function HomePage() {
           if (isMounted) {
             setApiKey(session.apiKey || "");
             setBaseURL(session.baseURL || "https://chickendog.cc/v1");
-            setImageModel(session.imageModel || "gpt-image-2");
+            setImageModel(DEFAULT_IMAGE_MODEL);
             setIsAuthenticated(false);
           }
         } catch {
@@ -359,7 +357,7 @@ export default function HomePage() {
         headers: {
           "x-openai-api-key": apiKey,
           "x-openai-base-url": baseURL,
-          "x-openai-image-model": imageModel
+          "x-openai-image-model": DEFAULT_IMAGE_MODEL
         },
         body: formData,
         signal: abortController.signal
@@ -371,14 +369,31 @@ export default function HomePage() {
         throw new Error(payload.error || t.requestFailed);
       }
 
+      const finalPayload =
+        payload.status === "succeeded"
+          ? payload
+          : payload.jobId
+            ? await pollGenerationJob({
+                jobId: payload.jobId,
+                apiKey,
+                baseURL,
+                imageModel: DEFAULT_IMAGE_MODEL,
+                signal: abortController.signal
+              })
+            : payload;
+
+      if (finalPayload.status && finalPayload.status !== "succeeded") {
+        throw new Error(finalPayload.error || t.requestFailed);
+      }
+
       const durationSeconds = Math.max(
         1,
         Math.round((Date.now() - requestStartedAtRef.current) / 1000)
       );
-      const nextResults = (payload.images || []).map((image) => ({
-        src: `data:image/png;base64,${image}`,
-        mode: payload.mode || "generate",
-        model: payload.model || "",
+      const nextResults = (finalPayload.images || []).map((image) => ({
+        src: image,
+        mode: finalPayload.mode || "generate",
+        model: finalPayload.model || "",
         createdAt: Date.now()
       }));
 
@@ -390,10 +405,10 @@ export default function HomePage() {
       writeWaitProfile({
         durationSeconds,
         quality,
-        mode: payload.mode || (referenceImages.length ? "edit" : "generate")
+        mode: finalPayload.mode || (referenceImages.length ? "edit" : "generate")
       });
-      setMode(payload.mode || "generate");
-      setModel(payload.model || "");
+      setMode(finalPayload.mode || "generate");
+      setModel(finalPayload.model || "");
       setStatus("success");
     } catch (submitError) {
       const message = String(submitError?.message || "");
@@ -512,13 +527,13 @@ export default function HomePage() {
     const session = {
       apiKey: apiKey.trim(),
       baseURL: baseURL.trim() || "https://chickendog.cc/v1",
-      imageModel: imageModel.trim() || "gpt-image-2"
+      imageModel: DEFAULT_IMAGE_MODEL
     };
 
     window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
     setApiKey(session.apiKey);
     setBaseURL(session.baseURL);
-    setImageModel(session.imageModel);
+    setImageModel(DEFAULT_IMAGE_MODEL);
     setError("");
     setIsAuthenticated(true);
   }
@@ -527,7 +542,7 @@ export default function HomePage() {
     window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
     setApiKey("");
     setBaseURL("https://chickendog.cc/v1");
-    setImageModel("gpt-image-2");
+    setImageModel(DEFAULT_IMAGE_MODEL);
     setPrompt("");
     referenceImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
     setReferenceImages([]);
@@ -647,8 +662,9 @@ export default function HomePage() {
               <input
                 type="text"
                 value={imageModel}
-                onChange={(event) => setImageModel(event.target.value)}
-                placeholder="gpt-image-2"
+                onChange={() => {}}
+                placeholder={DEFAULT_IMAGE_MODEL}
+                readOnly
                 autoComplete="off"
               />
             </label>
@@ -837,12 +853,6 @@ export default function HomePage() {
                 <p className="loading-time">
                   {t.elapsed} <strong>{elapsedSeconds}</strong> {t.seconds}
                 </p>
-                <p className="loading-time">
-                  {t.estimatedTotal} <strong>{estimatedSeconds}</strong> {t.seconds}
-                </p>
-                <p className="loading-time">
-                  {t.estimatedRemaining} <strong>{remainingSeconds}</strong> {t.seconds}
-                </p>
               </div>
             ) : currentResult ? (
               <div className="result-card">
@@ -951,6 +961,60 @@ async function readResponsePayload(response) {
   return {
     error: (await response.text()).trim()
   };
+}
+
+async function pollGenerationJob({ jobId, apiKey, baseURL, imageModel, signal }) {
+  for (;;) {
+    if (signal.aborted) {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    }
+
+    const response = await fetch(`/api/generate/${encodeURIComponent(jobId)}`, {
+      method: "GET",
+      headers: {
+        "x-openai-api-key": apiKey,
+        "x-openai-base-url": baseURL,
+        "x-openai-image-model": DEFAULT_IMAGE_MODEL
+      },
+      signal
+    });
+    const payload = await readResponsePayload(response);
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Request failed.");
+    }
+
+    if (payload.status === "succeeded") {
+      return payload;
+    }
+
+    if (payload.status === "failed") {
+      throw new Error(payload.error || "Image generation failed.");
+    }
+
+    await waitForPoll(JOB_POLL_INTERVAL_MS, signal);
+  }
+}
+
+function waitForPoll(durationMs, signal) {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      cleanup();
+      resolve();
+    }, durationMs);
+
+    function handleAbort() {
+      cleanup();
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    }
+
+    function cleanup() {
+      window.clearTimeout(timer);
+      signal.removeEventListener("abort", handleAbort);
+    }
+
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
 }
 
 function formatResultTime(timestamp, locale) {

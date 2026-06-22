@@ -1,5 +1,13 @@
 import { NextResponse } from "next/server";
 import { getImageModel } from "@/lib/openai";
+import {
+  getErrorMessage,
+  getErrorStatus,
+  getUpstreamErrorMessage,
+  normalizeImageResponse,
+  readUpstreamPayload,
+  sanitizeBaseURL
+} from "@/app/api/generate/shared";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -29,58 +37,6 @@ function readAllowedField(formData, key, allowedValues, fallback) {
   return allowedValues.has(value) ? value : fallback;
 }
 
-function getErrorStatus(error) {
-  const status = Number(error?.status);
-  return Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500;
-}
-
-function sanitizeBaseURL(baseURL) {
-  return baseURL?.trim() || "https://chickendog.cc/v1";
-}
-
-function getErrorMessage(error) {
-  const rawMessage = error?.error?.message || error?.message || "Image generation failed.";
-  const normalizedMessage = String(rawMessage);
-  const loweredMessage = normalizedMessage.toLowerCase();
-  const status = getErrorStatus(error);
-
-  if (
-    status === 524 ||
-    loweredMessage.includes("524") ||
-    loweredMessage.includes("timed out") ||
-    loweredMessage.includes("timeout") ||
-    loweredMessage.includes("etimedout")
-  ) {
-    return "The upstream image provider timed out. Try lower quality, fewer reference images, or a faster base URL.";
-  }
-
-  return normalizedMessage;
-}
-
-async function readUpstreamPayload(response) {
-  const contentType = response.headers.get("content-type") || "";
-
-  if (contentType.includes("application/json")) {
-    return response.json();
-  }
-
-  return {
-    error: (await response.text()).trim() || `Upstream returned ${response.status}.`
-  };
-}
-
-function getUpstreamErrorMessage(payload, fallback) {
-  if (typeof payload?.error === "string" && payload.error.trim()) {
-    return payload.error.trim();
-  }
-
-  if (typeof payload?.error?.message === "string" && payload.error.message.trim()) {
-    return payload.error.message.trim();
-  }
-
-  return fallback;
-}
-
 async function callImageGeneration({
   apiKey,
   normalizedBaseURL,
@@ -99,7 +55,7 @@ async function callImageGeneration({
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model,
+      ...(model ? { model } : {}),
       prompt,
       size,
       quality,
@@ -124,7 +80,9 @@ async function callImageEdit({
 }) {
   const upstreamFormData = new FormData();
 
-  upstreamFormData.append("model", model);
+  if (model) {
+    upstreamFormData.append("model", model);
+  }
   upstreamFormData.append("prompt", prompt);
   upstreamFormData.append("size", size);
   upstreamFormData.append("quality", quality);
@@ -224,23 +182,19 @@ export async function POST(request) {
       throw error;
     }
 
-    const images = Array.isArray(payload?.data)
-      ? payload.data.map((item) => item?.b64_json).filter(Boolean)
-      : [];
+    const normalizedPayload = normalizeImageResponse(payload, { mode, model });
 
     console.info("[api/generate] success", {
       mode,
       baseURL: normalizedBaseURL,
       model,
-      imageCount: images.length,
+      status: normalizedPayload.status,
+      imageCount: normalizedPayload.images.length,
+      jobId: normalizedPayload.jobId,
       durationMs: Date.now() - startedAt
     });
 
-    return NextResponse.json({
-      images,
-      mode,
-      model
-    });
+    return NextResponse.json(normalizedPayload);
   } catch (error) {
     const status = getErrorStatus(error);
     const message = getErrorMessage(error);
