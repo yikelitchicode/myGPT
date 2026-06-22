@@ -9,12 +9,15 @@ const RESULT_DB_NAME = "pocket-image-lab-results-db";
 const RESULT_STORE_NAME = "result-state";
 const RESULT_RECORD_KEY = "history";
 const WAIT_PROFILE_STORAGE_KEY = "pocket-image-lab-wait-profile";
-const REQUEST_TIMEOUT_MS = 120_000;
+const REQUEST_TIMEOUT_MS = 300_000;
 const JOB_POLL_INTERVAL_MS = 2_500;
+const PROGRESS_FREEZE_PERCENT = 83;
+const PROGRESS_MIN_TICK_MS = 5_000;
+const PROGRESS_MAX_TICK_MS = 8_000;
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 const DEFAULT_WAIT_ESTIMATES = {
-  generate: { low: 90, medium: 110, high: 120 },
-  edit: { low: 100, medium: 115, high: 120 }
+  generate: { low: 85, medium: 97, high: 110 },
+  edit: { low: 95, medium: 108, high: 122 }
 };
 
 const COPY = {
@@ -62,6 +65,8 @@ const COPY = {
     emptyBody: "不寫入資料庫、沒有帳號狀態。圖片歷史只保留在這個分頁的工作階段中。",
     loadingTitle: "正在生成圖片",
     loadingBody: "請稍候，伺服器正在處理你的請求。",
+    loadingProgress: "目前進度",
+    loadingAlmostThere: "已進入最後階段，等待圖片返回。",
     elapsed: "已等待",
     seconds: "秒",
     clearCurrent: "清除目前照片",
@@ -131,6 +136,8 @@ const COPY = {
     emptyBody: "No database and no account state. Image history stays only for this tab session.",
     loadingTitle: "Generating image",
     loadingBody: "Please wait while the server completes your request.",
+    loadingProgress: "Progress",
+    loadingAlmostThere: "In the final stage. Waiting for the image to return.",
     elapsed: "Elapsed",
     seconds: "sec",
     clearCurrent: "Clear current image",
@@ -177,6 +184,7 @@ export default function HomePage() {
   const [model, setModel] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [estimatedSeconds, setEstimatedSeconds] = useState(DEFAULT_WAIT_ESTIMATES.generate.medium);
+  const [progressPercent, setProgressPercent] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const referenceImagesRef = useRef([]);
   const requestStartedAtRef = useRef(0);
@@ -206,7 +214,12 @@ export default function HomePage() {
   const queueThresholdSeconds = Math.max(2, Math.round(estimatedSeconds * 0.35));
   const loadingPhase = elapsedSeconds < queueThresholdSeconds ? "queueing" : "rendering";
   const loadingTitle = loadingPhase === "queueing" ? t.queueingTitle : t.renderingTitle;
-  const loadingBody = loadingPhase === "queueing" ? t.queueingBody : t.renderingBody;
+  const loadingBody =
+    progressPercent >= PROGRESS_FREEZE_PERCENT
+      ? t.loadingAlmostThere
+      : loadingPhase === "queueing"
+        ? t.queueingBody
+        : t.renderingBody;
   const visibleResultPosition =
     activeResultIndex >= 0
       ? formatCopy(t.resultPosition, {
@@ -260,7 +273,9 @@ export default function HomePage() {
       }
 
       if (isMounted) {
-        setEstimatedSeconds(waitProfiles.generate?.medium?.averageSeconds || DEFAULT_WAIT_ESTIMATES.generate.medium);
+        setEstimatedSeconds(
+          waitProfiles.generate?.medium?.["1024x1024"]?.averageSeconds || DEFAULT_WAIT_ESTIMATES.generate.medium
+        );
         setIsReady(true);
       }
     }
@@ -294,6 +309,62 @@ export default function HomePage() {
 
     return () => window.clearInterval(timer);
   }, [status]);
+
+  useEffect(() => {
+    if (status !== "loading") {
+      setProgressPercent(0);
+      return;
+    }
+
+    let cancelled = false;
+    let timer = null;
+
+    setProgressPercent((current) => (current > 0 ? current : 4));
+
+    const scheduleTick = () => {
+      const delay = randomBetween(PROGRESS_MIN_TICK_MS, PROGRESS_MAX_TICK_MS);
+
+      timer = window.setTimeout(() => {
+        if (cancelled) {
+          return;
+        }
+
+        const elapsed = Math.max(0, (Date.now() - requestStartedAtRef.current) / 1000);
+        const estimated = Math.max(estimatedSeconds, 1);
+        const expected = Math.min(PROGRESS_FREEZE_PERCENT, Math.round((elapsed / estimated) * PROGRESS_FREEZE_PERCENT));
+
+        setProgressPercent((current) => {
+          if (current >= PROGRESS_FREEZE_PERCENT) {
+            return PROGRESS_FREEZE_PERCENT;
+          }
+
+          const remaining = Math.max(PROGRESS_FREEZE_PERCENT - current, 0);
+          const remainingTime = Math.max(estimated - elapsed, 1);
+          const projectedSteps = Math.max(
+            1,
+            Math.round(remainingTime / ((PROGRESS_MIN_TICK_MS + PROGRESS_MAX_TICK_MS) / 2000))
+          );
+          const baseStep = Math.max(1, Math.round(remaining / projectedSteps));
+          const jitter = Math.max(0, Math.round(Math.random() * 2));
+          const candidate = current + baseStep + jitter;
+          const next = Math.max(candidate, expected);
+
+          return Math.min(PROGRESS_FREEZE_PERCENT, next);
+        });
+
+        scheduleTick();
+      }, delay);
+    };
+
+    scheduleTick();
+
+    return () => {
+      cancelled = true;
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [estimatedSeconds, status]);
 
   useEffect(() => {
     referenceImagesRef.current = referenceImages;
@@ -330,7 +401,8 @@ export default function HomePage() {
     setEstimatedSeconds(
       getEstimatedWaitSeconds({
         quality,
-        mode: referenceImages.length ? "edit" : "generate"
+        mode: referenceImages.length ? "edit" : "generate",
+        size
       })
     );
     setError("");
@@ -405,7 +477,8 @@ export default function HomePage() {
       writeWaitProfile({
         durationSeconds,
         quality,
-        mode: finalPayload.mode || (referenceImages.length ? "edit" : "generate")
+        mode: finalPayload.mode || (referenceImages.length ? "edit" : "generate"),
+        size
       });
       setMode(finalPayload.mode || "generate");
       setModel(finalPayload.model || "");
@@ -552,6 +625,7 @@ export default function HomePage() {
     setStatus("idle");
     setElapsedSeconds(0);
     setEstimatedSeconds(DEFAULT_WAIT_ESTIMATES.generate.medium);
+    setProgressPercent(0);
     setIsAuthenticated(false);
   }
 
@@ -850,9 +924,15 @@ export default function HomePage() {
                 <p className="loading-phase">{loadingTitle}</p>
                 <p className="loading-title">{t.loadingTitle}</p>
                 <p className="muted">{loadingBody}</p>
-                <p className="loading-time">
-                  {t.elapsed} <strong>{elapsedSeconds}</strong> {t.seconds}
-                </p>
+                <div className="loading-progress" aria-label={t.loadingProgress}>
+                  <div className="loading-progress-track">
+                    <div className="loading-progress-fill" style={{ width: `${progressPercent}%` }} />
+                  </div>
+                  <div className="loading-progress-meta">
+                    <span>{t.loadingProgress}</span>
+                    <strong>{progressPercent}%</strong>
+                  </div>
+                </div>
               </div>
             ) : currentResult ? (
               <div className="result-card">
@@ -894,10 +974,12 @@ function readWaitProfiles() {
   }
 }
 
-function getEstimatedWaitSeconds({ quality, mode }) {
+function getEstimatedWaitSeconds({ quality, mode, size }) {
   const profiles = readWaitProfiles();
-  const fallback = DEFAULT_WAIT_ESTIMATES[mode]?.[quality] || DEFAULT_WAIT_ESTIMATES.generate.medium;
-  const storedAverage = profiles?.[mode]?.[quality]?.averageSeconds;
+  const fallback =
+    (DEFAULT_WAIT_ESTIMATES[mode]?.[quality] || DEFAULT_WAIT_ESTIMATES.generate.medium) +
+    getSizeWaitAdjustment(size);
+  const storedAverage = profiles?.[mode]?.[quality]?.[size]?.averageSeconds;
 
   if (!storedAverage) {
     return fallback;
@@ -914,14 +996,16 @@ function getEstimatedWaitSeconds({ quality, mode }) {
   );
 }
 
-function writeWaitProfile({ durationSeconds, quality, mode }) {
+function writeWaitProfile({ durationSeconds, quality, mode, size }) {
   if (typeof window === "undefined") {
     return;
   }
 
   const profiles = readWaitProfiles();
-  const fallback = DEFAULT_WAIT_ESTIMATES[mode]?.[quality] || DEFAULT_WAIT_ESTIMATES.generate.medium;
-  const currentBucket = profiles?.[mode]?.[quality] || {
+  const fallback =
+    (DEFAULT_WAIT_ESTIMATES[mode]?.[quality] || DEFAULT_WAIT_ESTIMATES.generate.medium) +
+    getSizeWaitAdjustment(size);
+  const currentBucket = profiles?.[mode]?.[quality]?.[size] || {
     averageSeconds: fallback,
     sampleCount: 0
   };
@@ -938,8 +1022,11 @@ function writeWaitProfile({ durationSeconds, quality, mode }) {
     [mode]: {
       ...(profiles[mode] || {}),
       [quality]: {
-        averageSeconds: nextAverageSeconds,
-        sampleCount: nextSampleCount
+        ...(profiles?.[mode]?.[quality] || {}),
+        [size]: {
+          averageSeconds: nextAverageSeconds,
+          sampleCount: nextSampleCount
+        }
       }
     }
   };
@@ -949,6 +1036,29 @@ function writeWaitProfile({ durationSeconds, quality, mode }) {
 
 function formatCopy(template, values) {
   return template.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? "");
+}
+
+function randomBetween(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function getSizeWaitAdjustment(size) {
+  if (typeof size !== "string") {
+    return 0;
+  }
+
+  const [width, height] = size.split("x").map(Number);
+  const maxEdge = Math.max(width || 0, height || 0);
+
+  if (maxEdge <= 1024) {
+    return 0;
+  }
+
+  if (maxEdge <= 1536) {
+    return 12;
+  }
+
+  return 24;
 }
 
 async function readResponsePayload(response) {
