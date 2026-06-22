@@ -338,16 +338,18 @@ export default function HomePage() {
             return PROGRESS_FREEZE_PERCENT;
           }
 
-          const remaining = Math.max(PROGRESS_FREEZE_PERCENT - current, 0);
-          const remainingTime = Math.max(estimated - elapsed, 1);
-          const projectedSteps = Math.max(
-            1,
-            Math.round(remainingTime / ((PROGRESS_MIN_TICK_MS + PROGRESS_MAX_TICK_MS) / 2000))
-          );
-          const baseStep = Math.max(1, Math.round(remaining / projectedSteps));
-          const jitter = Math.max(0, Math.round(Math.random() * 2));
+          const phase = getProgressPhase(current);
+          const baseStep = getProgressStep({
+            current,
+            expected,
+            phase,
+            estimated,
+            elapsed
+          });
+          const jitter = getProgressJitter(phase);
           const candidate = current + baseStep + jitter;
-          const next = Math.max(candidate, expected);
+          const cappedCandidate = Math.min(candidate, getProgressPhaseCeiling(phase));
+          const next = Math.max(cappedCandidate, expected);
 
           return Math.min(PROGRESS_FREEZE_PERCENT, next);
         });
@@ -1040,6 +1042,60 @@ function formatCopy(template, values) {
 
 function randomBetween(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function getProgressPhase(progressPercent) {
+  if (progressPercent < 30) {
+    return "early";
+  }
+
+  if (progressPercent < 70) {
+    return "middle";
+  }
+
+  return "late";
+}
+
+function getProgressPhaseCeiling(phase) {
+  if (phase === "early") {
+    return 34;
+  }
+
+  if (phase === "middle") {
+    return 74;
+  }
+
+  return PROGRESS_FREEZE_PERCENT;
+}
+
+function getProgressStep({ current, expected, phase, estimated, elapsed }) {
+  const remaining = Math.max(PROGRESS_FREEZE_PERCENT - current, 0);
+  const remainingTime = Math.max(estimated - elapsed, 1);
+  const averageTickSeconds = (PROGRESS_MIN_TICK_MS + PROGRESS_MAX_TICK_MS) / 2000;
+  const projectedSteps = Math.max(1, Math.round(remainingTime / averageTickSeconds));
+  const catchUpStep = Math.max(1, Math.round((expected - current) * 0.7));
+
+  if (phase === "early") {
+    return Math.max(4, Math.round(remaining / Math.max(3, projectedSteps * 0.5)), catchUpStep);
+  }
+
+  if (phase === "middle") {
+    return Math.max(2, Math.round(remaining / Math.max(5, projectedSteps * 0.85)), catchUpStep);
+  }
+
+  return Math.max(1, Math.round(remaining / Math.max(8, projectedSteps * 1.4)), Math.min(catchUpStep, 2));
+}
+
+function getProgressJitter(phase) {
+  if (phase === "early") {
+    return randomBetween(1, 3);
+  }
+
+  if (phase === "middle") {
+    return randomBetween(0, 2);
+  }
+
+  return randomBetween(0, 1);
 }
 
 function getSizeWaitAdjustment(size) {
