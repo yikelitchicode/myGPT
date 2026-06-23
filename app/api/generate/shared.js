@@ -26,6 +26,79 @@ export function getErrorMessage(error) {
   return normalizedMessage;
 }
 
+export function classifyError(error) {
+  const rawMessage = error?.error?.message || error?.message || "";
+  const message = String(rawMessage);
+  const loweredMessage = message.toLowerCase();
+  const status = getErrorStatus(error);
+
+  if (error?.name === "AbortError") {
+    return {
+      source: "client",
+      type: "request_aborted",
+      retryable: true
+    };
+  }
+
+  if (
+    status === 524 ||
+    status === 504 ||
+    status === 408 ||
+    loweredMessage.includes("timed out") ||
+    loweredMessage.includes("timeout") ||
+    loweredMessage.includes("etimedout")
+  ) {
+    return {
+      source: "upstream",
+      type: "timeout",
+      retryable: true
+    };
+  }
+
+  if (
+    loweredMessage.includes("max duration") ||
+    loweredMessage.includes("function invocation timeout") ||
+    loweredMessage.includes("serverless function has timed out") ||
+    loweredMessage.includes("execution timed out")
+  ) {
+    return {
+      source: "platform",
+      type: "runtime_timeout",
+      retryable: true
+    };
+  }
+
+  if (status === 429) {
+    return {
+      source: "upstream",
+      type: "rate_limited",
+      retryable: true
+    };
+  }
+
+  if (status >= 500) {
+    return {
+      source: "upstream",
+      type: "server_error",
+      retryable: true
+    };
+  }
+
+  if (status >= 400) {
+    return {
+      source: "upstream",
+      type: "request_error",
+      retryable: false
+    };
+  }
+
+  return {
+    source: "unknown",
+    type: "unknown",
+    retryable: false
+  };
+}
+
 export async function readUpstreamPayload(response) {
   const contentType = response.headers.get("content-type") || "";
 

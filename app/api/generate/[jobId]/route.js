@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getImageModel } from "@/lib/openai";
 import {
+  classifyError,
   getErrorMessage,
   getErrorStatus,
   getUpstreamErrorMessage,
@@ -78,10 +79,12 @@ export async function GET(request, { params }) {
   } catch (error) {
     const status = getErrorStatus(error);
     const message = getErrorMessage(error);
+    const diagnostic = classifyError(error);
 
     console.error("[api/generate/job] failure", {
       status,
       message,
+      diagnostic,
       upstreamStatus: error?.status ?? null,
       upstreamCode: error?.code ?? null,
       upstreamType: error?.type ?? null,
@@ -89,6 +92,6 @@ export async function GET(request, { params }) {
       durationMs: Date.now() - startedAt
     });
 
-    return NextResponse.json({ error: message }, { status });
+    return NextResponse.json({ error: message, ...diagnostic }, { status });
   }
 }

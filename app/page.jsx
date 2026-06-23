@@ -440,7 +440,7 @@ export default function HomePage() {
       const payload = await readResponsePayload(response);
 
       if (!response.ok) {
-        throw new Error(payload.error || t.requestFailed);
+        throw toErrorWithPayload(payload, t.requestFailed);
       }
 
       const finalPayload =
@@ -457,7 +457,7 @@ export default function HomePage() {
             : payload;
 
       if (finalPayload.status && finalPayload.status !== "succeeded") {
-        throw new Error(finalPayload.error || t.requestFailed);
+        throw toErrorWithPayload(finalPayload, t.requestFailed);
       }
 
       const durationSeconds = Math.max(
@@ -488,9 +488,19 @@ export default function HomePage() {
     } catch (submitError) {
       const message = String(submitError?.message || "");
       const loweredMessage = message.toLowerCase();
+      const source = String(submitError?.source || "");
+      const type = String(submitError?.type || "");
+
+      console.warn("[image-request] failed", {
+        source: source || "unknown",
+        type: type || "unknown",
+        message
+      });
 
       if (
         submitError?.name === "AbortError" ||
+        type === "timeout" ||
+        type === "runtime_timeout" ||
         loweredMessage.includes("timed out") ||
         loweredMessage.includes("timeout") ||
         loweredMessage.includes("524")
@@ -1129,6 +1139,14 @@ async function readResponsePayload(response) {
   };
 }
 
+function toErrorWithPayload(payload, fallbackMessage) {
+  const error = new Error(payload?.error || fallbackMessage);
+  error.source = payload?.source || "unknown";
+  error.type = payload?.type || "unknown";
+  error.retryable = Boolean(payload?.retryable);
+  return error;
+}
+
 async function pollGenerationJob({ jobId, apiKey, baseURL, imageModel, signal }) {
   for (;;) {
     if (signal.aborted) {
@@ -1147,7 +1165,7 @@ async function pollGenerationJob({ jobId, apiKey, baseURL, imageModel, signal })
     const payload = await readResponsePayload(response);
 
     if (!response.ok) {
-      throw new Error(payload.error || "Request failed.");
+      throw toErrorWithPayload(payload, "Request failed.");
     }
 
     if (payload.status === "succeeded") {
@@ -1155,7 +1173,7 @@ async function pollGenerationJob({ jobId, apiKey, baseURL, imageModel, signal })
     }
 
     if (payload.status === "failed") {
-      throw new Error(payload.error || "Image generation failed.");
+      throw toErrorWithPayload(payload, "Image generation failed.");
     }
 
     await waitForPoll(JOB_POLL_INTERVAL_MS, signal);
