@@ -244,10 +244,14 @@ export async function POST(request) {
       const analysisPayload = await readUpstreamPayload(analysisResponse);
 
       if (!analysisResponse.ok) {
-        const message = getUpstreamErrorMessage(
+        const upstreamMessage = getUpstreamErrorMessage(
           analysisPayload,
           `Upstream returned ${analysisResponse.status}.`
         );
+        const message =
+          "Reference image analysis failed on /chat/completions. " +
+          `Provider/model may not support image input for ${REFERENCE_ANALYSIS_MODEL}. ` +
+          upstreamMessage;
         const error = new Error(message);
         error.status = analysisResponse.status;
         error.payload = analysisPayload;
