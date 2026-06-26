@@ -12,7 +12,7 @@ import {
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
-const REFERENCE_ANALYSIS_MODEL = "gpt-4o";
+const REFERENCE_ANALYSIS_MODEL = "gpt-5.4-mini";
 
 const ALLOWED_SIZES = new Set(["1024x1024", "1536x1024", "1024x1536"]);
 const ALLOWED_QUALITIES = new Set(["low", "medium", "high", "1k", "2k", "4k"]);
