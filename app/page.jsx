@@ -581,8 +581,9 @@ export default function HomePage() {
         submitError?.name === "AbortError" ||
         type === "timeout" ||
         type === "runtime_timeout" ||
-        loweredMessage.includes("timed out") ||
-        loweredMessage.includes("timeout") ||
+        loweredMessage.includes("function invocation timeout") ||
+        loweredMessage.includes("serverless function has timed out") ||
+        loweredMessage.includes("execution timed out") ||
         loweredMessage.includes("524")
       ) {
         setError(t.timeoutFailed);

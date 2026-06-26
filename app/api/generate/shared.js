@@ -15,10 +15,11 @@ export function getErrorMessage(error) {
 
   if (
     status === 524 ||
-    loweredMessage.includes("524") ||
-    loweredMessage.includes("timed out") ||
-    loweredMessage.includes("timeout") ||
-    loweredMessage.includes("etimedout")
+    status === 504 ||
+    status === 408 ||
+    loweredMessage.includes("function invocation timeout") ||
+    loweredMessage.includes("serverless function has timed out") ||
+    loweredMessage.includes("execution timed out")
   ) {
     return "The upstream image provider timed out. Try lower quality, fewer reference images, or a faster base URL.";
   }
@@ -44,9 +45,9 @@ export function classifyError(error) {
     status === 524 ||
     status === 504 ||
     status === 408 ||
-    loweredMessage.includes("timed out") ||
-    loweredMessage.includes("timeout") ||
-    loweredMessage.includes("etimedout")
+    loweredMessage.includes("function invocation timeout") ||
+    loweredMessage.includes("serverless function has timed out") ||
+    loweredMessage.includes("execution timed out")
   ) {
     return {
       source: "upstream",
