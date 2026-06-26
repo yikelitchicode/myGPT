@@ -193,6 +193,13 @@ export function normalizeImageResponse(payload, { mode, model }) {
   const images = extractImages(payload);
   const jobId = readJobId(payload);
   const status = readJobStatus(payload);
+  const referenceDescription =
+    typeof payload?.referenceDescription === "string" && payload.referenceDescription.trim()
+      ? payload.referenceDescription.trim()
+      : typeof payload?.result?.referenceDescription === "string" &&
+          payload.result.referenceDescription.trim()
+        ? payload.result.referenceDescription.trim()
+        : "";
 
   if (images.length > 0) {
     return {
@@ -200,7 +207,8 @@ export function normalizeImageResponse(payload, { mode, model }) {
       images,
       jobId,
       mode,
-      model
+      model,
+      referenceDescription
     };
   }
 
@@ -210,7 +218,8 @@ export function normalizeImageResponse(payload, { mode, model }) {
       images: [],
       jobId,
       mode,
-      model
+      model,
+      referenceDescription
     };
   }
 
@@ -226,6 +235,7 @@ export function normalizeImageResponse(payload, { mode, model }) {
     images: [],
     jobId: null,
     mode,
-    model
+    model,
+    referenceDescription
   };
 }

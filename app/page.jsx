@@ -15,9 +15,17 @@ const PROGRESS_FREEZE_PERCENT = 83;
 const PROGRESS_MIN_TICK_MS = 5_000;
 const PROGRESS_MAX_TICK_MS = 8_000;
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
+const QUALITY_COMPAT_MAP = {
+  low: "1k",
+  medium: "2k",
+  high: "4k",
+  "1k": "1k",
+  "2k": "2k",
+  "4k": "4k"
+};
 const DEFAULT_WAIT_ESTIMATES = {
-  generate: { low: 85, medium: 97, high: 110 },
-  edit: { low: 95, medium: 108, high: 122 }
+  generate: { "1k": 85, "2k": 97, "4k": 110 },
+  edit: { "1k": 95, "2k": 108, "4k": 122 }
 };
 
 const COPY = {
@@ -39,8 +47,16 @@ const COPY = {
     sessionEyebrow: "Session Active",
     logOut: "登出",
     prompt: "提示詞",
-    promptPlaceholder: "描述你想生成的圖片，或說明要如何編修上傳的參考圖。",
-    promptHints: "提示詞靈感",
+    promptPlaceholder: "描述你想生成的圖片，或說明要如何參考上傳圖片來生成新圖。",
+    promptHelpers: "提示工具",
+    promptSamples: "示範 Prompt",
+    promptHints: "添加 Hints",
+    promptSamplesBody: "直接帶入一段完整示範 prompt，再依需求微調。",
+    promptHintsBody: "快速補上風格、鏡頭、材質、光線與構圖等關鍵字。",
+    usePrompt: "套用",
+    addHint: "加入",
+    expandHints: "展開更多",
+    collapseHints: "收合",
     aspect: "比例",
     quality: "品質",
     referenceImage: "參考圖片（可選，最多 16 張）",
@@ -53,13 +69,15 @@ const COPY = {
     queueingBody: "請求已送出，正在等待伺服器開始處理。",
     renderingTitle: "生成中",
     renderingBody: "模型正在繪製圖片，完成後會自動顯示。",
-    editImage: "編修圖片",
+    editImage: "參考生成",
     generateImage: "生成圖片",
     outputEyebrow: "輸出",
-    editedResult: "編修結果",
+    editedResult: "參考生成結果",
     freshRender: "生成結果",
     generatedResult: "生成結果",
     generatedAt: "生成時間",
+    referenceAnalysis: "參考圖分析",
+    referenceAnalysisBody: "系統先讀取上傳圖片，整理出這段視覺描述，再用它輔助生成。",
     downloadPng: "下載 PNG",
     emptyTitle: "你的生成圖片會顯示在這裡。",
     emptyBody: "不寫入資料庫、沒有帳號狀態。圖片歷史只保留在這個分頁的工作階段中。",
@@ -87,10 +105,32 @@ const COPY = {
     sizeSquare: "正方形",
     sizeLandscape: "橫向",
     sizePortrait: "直向",
-    qualityBalanced: "平衡",
-    qualitySharp: "精細",
-    qualityFast: "快速",
-    hints: ["電影感海報", "產品攝影", "動漫電影劇照", "水彩旅行速寫"]
+    quality1k: "1k",
+    quality2k: "2k",
+    quality4k: "4k",
+    hints: [
+      "電影感海報",
+      "產品攝影",
+      "動漫電影劇照",
+      "水彩旅行速寫",
+      "柔和自然光",
+      "高對比戲劇光",
+      "逆光輪廓",
+      "廣角鏡頭",
+      "淺景深",
+      "極簡留白",
+      "雜誌編輯風",
+      "超寫實細節",
+      "霧面材質",
+      "膠片顆粒",
+      "乾淨背景",
+      "高級配色"
+    ],
+    samplePrompts: [
+      "一張高級雜誌封面風格的香水產品攝影，玻璃瓶置中，琥珀色液體折射暖光，米白石材底座，乾淨背景，細膩陰影，商業廣告質感，超高細節。",
+      "一位年輕旅人站在山城雨夜的霓虹街口，濕潤路面反射橙紅與青藍燈光，電影感構圖，中景人物，薄霧空氣，寫實但帶一點詩意。",
+      "日系動畫電影感的一碗拉麵特寫，熱氣上升，木質吧台與暖色燈籠背景，鏡頭貼近食物，湯面油光與配料細節豐富，溫暖療癒。"
+    ]
   },
   en: {
     localeLabel: "繁中",
@@ -110,8 +150,16 @@ const COPY = {
     sessionEyebrow: "Session Active",
     logOut: "Log out",
     prompt: "Prompt",
-    promptPlaceholder: "Describe the image you want, or explain how the uploaded image should be edited.",
-    promptHints: "Prompt hints",
+    promptPlaceholder: "Describe the image you want, or explain how the uploaded image should be used as reference for a new generation.",
+    promptHelpers: "Prompt helpers",
+    promptSamples: "Sample prompts",
+    promptHints: "Add hints",
+    promptSamplesBody: "Insert a full sample prompt, then tune it to fit your image.",
+    promptHintsBody: "Quickly add style, lens, texture, lighting, and composition keywords.",
+    usePrompt: "Use prompt",
+    addHint: "Add",
+    expandHints: "Show more",
+    collapseHints: "Collapse",
     aspect: "Aspect",
     quality: "Quality",
     referenceImage: "Reference images (optional, up to 16)",
@@ -124,13 +172,15 @@ const COPY = {
     queueingBody: "Your request has been sent and is waiting for server processing.",
     renderingTitle: "Rendering",
     renderingBody: "The model is drawing your image and will show it automatically when done.",
-    editImage: "Edit image",
+    editImage: "Generate from reference",
     generateImage: "Generate image",
     outputEyebrow: "Output",
-    editedResult: "Edited result",
+    editedResult: "Reference-based result",
     freshRender: "Fresh render",
     generatedResult: "Generated result",
     generatedAt: "Generated at",
+    referenceAnalysis: "Reference analysis",
+    referenceAnalysisBody: "The system first reads the uploaded image, turns it into a visual description, and uses that description to guide generation.",
     downloadPng: "Download PNG",
     emptyTitle: "Your generated image will appear here.",
     emptyBody: "No database and no account state. Image history stays only for this tab session.",
@@ -158,10 +208,32 @@ const COPY = {
     sizeSquare: "Square",
     sizeLandscape: "Landscape",
     sizePortrait: "Portrait",
-    qualityBalanced: "Balanced",
-    qualitySharp: "Sharp",
-    qualityFast: "Fast",
-    hints: ["editorial poster", "product photo", "anime cinematic still", "watercolor travel sketch"]
+    quality1k: "1k",
+    quality2k: "2k",
+    quality4k: "4k",
+    hints: [
+      "editorial poster",
+      "product photo",
+      "anime cinematic still",
+      "watercolor travel sketch",
+      "soft natural light",
+      "dramatic contrast lighting",
+      "backlit silhouette",
+      "wide-angle lens",
+      "shallow depth of field",
+      "minimal negative space",
+      "luxury magazine styling",
+      "ultra detailed textures",
+      "matte finish",
+      "film grain",
+      "clean background",
+      "premium color palette"
+    ],
+    samplePrompts: [
+      "Luxury editorial perfume product shot, centered glass bottle with amber liquid, warm refractions, off-white stone pedestal, clean background, refined shadows, premium commercial photography, ultra detailed.",
+      "A young traveler standing at a neon-lit street corner in a mountain city at night, wet pavement reflecting orange and teal lights, cinematic composition, mid-shot portrait, light mist in the air, realistic with poetic mood.",
+      "A cozy Japanese anime film-style ramen close-up, rising steam, wooden counter, warm lantern bokeh in the background, intimate food photography angle, rich broth highlights, highly detailed toppings, comforting atmosphere."
+    ]
   }
 };
 
@@ -174,7 +246,7 @@ export default function HomePage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState("1024x1024");
-  const [quality, setQuality] = useState("medium");
+  const [quality, setQuality] = useState("2k");
   const [referenceImages, setReferenceImages] = useState([]);
   const [resultHistory, setResultHistory] = useState([]);
   const [activeResultIndex, setActiveResultIndex] = useState(-1);
@@ -183,9 +255,11 @@ export default function HomePage() {
   const [mode, setMode] = useState("generate");
   const [model, setModel] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [estimatedSeconds, setEstimatedSeconds] = useState(DEFAULT_WAIT_ESTIMATES.generate.medium);
+  const [estimatedSeconds, setEstimatedSeconds] = useState(DEFAULT_WAIT_ESTIMATES.generate["2k"]);
   const [progressPercent, setProgressPercent] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const [activePromptHelperTab, setActivePromptHelperTab] = useState("samples");
+  const [isHintsExpanded, setIsHintsExpanded] = useState(false);
   const referenceImagesRef = useRef([]);
   const requestStartedAtRef = useRef(0);
 
@@ -196,10 +270,11 @@ export default function HomePage() {
     { value: "1024x1536", label: t.sizePortrait }
   ];
   const qualityOptions = [
-    { value: "medium", label: t.qualityBalanced },
-    { value: "high", label: t.qualitySharp },
-    { value: "low", label: t.qualityFast }
+    { value: "1k", label: t.quality1k },
+    { value: "2k", label: t.quality2k },
+    { value: "4k", label: t.quality4k }
   ];
+  const visibleHints = isHintsExpanded ? t.hints : t.hints.slice(0, 8);
   const currentResult =
     activeResultIndex >= 0 && activeResultIndex < resultHistory.length
       ? resultHistory[activeResultIndex]
@@ -274,7 +349,11 @@ export default function HomePage() {
 
       if (isMounted) {
         setEstimatedSeconds(
-          waitProfiles.generate?.medium?.["1024x1024"]?.averageSeconds || DEFAULT_WAIT_ESTIMATES.generate.medium
+          getStoredAverageSeconds(waitProfiles, {
+            mode: "generate",
+            quality: "2k",
+            size: "1024x1024"
+          }) || DEFAULT_WAIT_ESTIMATES.generate["2k"]
         );
         setIsReady(true);
       }
@@ -403,7 +482,7 @@ export default function HomePage() {
     setEstimatedSeconds(
       getEstimatedWaitSeconds({
         quality,
-        mode: referenceImages.length ? "edit" : "generate",
+        mode: "generate",
         size
       })
     );
@@ -466,8 +545,9 @@ export default function HomePage() {
       );
       const nextResults = (finalPayload.images || []).map((image) => ({
         src: image,
-        mode: finalPayload.mode || "generate",
+        mode: referenceImages.length ? "reference-generate" : (finalPayload.mode || "generate"),
         model: finalPayload.model || "",
+        referenceDescription: finalPayload.referenceDescription || "",
         createdAt: Date.now()
       }));
 
@@ -479,10 +559,10 @@ export default function HomePage() {
       writeWaitProfile({
         durationSeconds,
         quality,
-        mode: finalPayload.mode || (referenceImages.length ? "edit" : "generate"),
+        mode: finalPayload.mode || "generate",
         size
       });
-      setMode(finalPayload.mode || "generate");
+      setMode(referenceImages.length ? "reference-generate" : (finalPayload.mode || "generate"));
       setModel(finalPayload.model || "");
       setStatus("success");
     } catch (submitError) {
@@ -521,6 +601,10 @@ export default function HomePage() {
       const trimmed = current.trim();
       return trimmed ? `${trimmed}，${hint}` : hint;
     });
+  }
+
+  function applySamplePrompt(samplePrompt) {
+    setPrompt(samplePrompt);
   }
 
   function updateReferenceImages(fileList) {
@@ -636,7 +720,7 @@ export default function HomePage() {
     setMode("generate");
     setStatus("idle");
     setElapsedSeconds(0);
-    setEstimatedSeconds(DEFAULT_WAIT_ESTIMATES.generate.medium);
+    setEstimatedSeconds(DEFAULT_WAIT_ESTIMATES.generate["2k"]);
     setProgressPercent(0);
     setIsAuthenticated(false);
   }
@@ -798,13 +882,65 @@ export default function HomePage() {
               />
             </label>
 
-            <div className="hint-row" aria-label={t.promptHints}>
-              {t.hints.map((hint) => (
-                <button key={hint} type="button" className="chip" onClick={() => applyStyleHint(hint)}>
-                  {hint}
+            <section className="prompt-helper" aria-label={t.promptHelpers}>
+              <div className="prompt-helper-tabs" role="tablist" aria-label={t.promptHelpers}>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`helper-tab${activePromptHelperTab === "samples" ? " active" : ""}`}
+                  aria-selected={activePromptHelperTab === "samples"}
+                  onClick={() => setActivePromptHelperTab("samples")}
+                >
+                  {t.promptSamples}
                 </button>
-              ))}
-            </div>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`helper-tab${activePromptHelperTab === "hints" ? " active" : ""}`}
+                  aria-selected={activePromptHelperTab === "hints"}
+                  onClick={() => setActivePromptHelperTab("hints")}
+                >
+                  {t.promptHints}
+                </button>
+              </div>
+
+              {activePromptHelperTab === "samples" ? (
+                <div className="helper-panel">
+                  <p className="helper-copy">{t.promptSamplesBody}</p>
+                  <div className="sample-prompt-list">
+                    {t.samplePrompts.map((samplePrompt) => (
+                      <article key={samplePrompt} className="sample-prompt-card">
+                        <p>{samplePrompt}</p>
+                        <button type="button" className="ghost helper-action" onClick={() => applySamplePrompt(samplePrompt)}>
+                          {t.usePrompt}
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="helper-panel">
+                  <div className="helper-panel-head">
+                    <p className="helper-copy">{t.promptHintsBody}</p>
+                    <button
+                      type="button"
+                      className="ghost helper-toggle"
+                      onClick={() => setIsHintsExpanded((current) => !current)}
+                      aria-expanded={isHintsExpanded}
+                    >
+                      {isHintsExpanded ? t.collapseHints : t.expandHints}
+                    </button>
+                  </div>
+                  <div className="hint-row">
+                    {visibleHints.map((hint) => (
+                      <button key={hint} type="button" className="chip" onClick={() => applyStyleHint(hint)}>
+                        {hint}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
 
             <div className="grid-two">
               <label className="field">
@@ -878,7 +1014,7 @@ export default function HomePage() {
             <div className="output-head">
               <div>
                 <p className="eyebrow">{t.outputEyebrow}</p>
-                <h2>{(outputResult?.mode || mode) === "edit" ? t.editedResult : t.freshRender}</h2>
+                <h2>{(outputResult?.mode || mode) === "reference-generate" ? t.editedResult : t.freshRender}</h2>
               </div>
               {outputResult?.model || model ? <span className="badge">{outputResult?.model || model}</span> : null}
             </div>
@@ -952,6 +1088,13 @@ export default function HomePage() {
                 <p className="result-meta">
                   {t.generatedAt} {formatResultTime(currentResult.createdAt, locale)}
                 </p>
+                {currentResult.referenceDescription ? (
+                  <div className="reference-analysis">
+                    <p className="reference-analysis-title">{t.referenceAnalysis}</p>
+                    <p className="reference-analysis-body">{t.referenceAnalysisBody}</p>
+                    <p className="reference-analysis-copy">{currentResult.referenceDescription}</p>
+                  </div>
+                ) : null}
                 <a href={currentResult.src} download="pocket-image-lab.png" className="download">
                   {t.downloadPng}
                 </a>
@@ -986,12 +1129,36 @@ function readWaitProfiles() {
   }
 }
 
+function normalizeQualityKey(quality) {
+  return QUALITY_COMPAT_MAP[quality] || "2k";
+}
+
+function getStoredAverageSeconds(profiles, { mode, quality, size }) {
+  const normalizedQuality = normalizeQualityKey(quality);
+  const directAverage = profiles?.[mode]?.[normalizedQuality]?.[size]?.averageSeconds;
+
+  if (directAverage) {
+    return directAverage;
+  }
+
+  if (normalizedQuality === quality) {
+    return null;
+  }
+
+  return profiles?.[mode]?.[quality]?.[size]?.averageSeconds || null;
+}
+
 function getEstimatedWaitSeconds({ quality, mode, size }) {
   const profiles = readWaitProfiles();
+  const normalizedQuality = normalizeQualityKey(quality);
   const fallback =
-    (DEFAULT_WAIT_ESTIMATES[mode]?.[quality] || DEFAULT_WAIT_ESTIMATES.generate.medium) +
+    (DEFAULT_WAIT_ESTIMATES[mode]?.[normalizedQuality] || DEFAULT_WAIT_ESTIMATES.generate["2k"]) +
     getSizeWaitAdjustment(size);
-  const storedAverage = profiles?.[mode]?.[quality]?.[size]?.averageSeconds;
+  const storedAverage = getStoredAverageSeconds(profiles, {
+    mode,
+    quality,
+    size
+  });
 
   if (!storedAverage) {
     return fallback;
@@ -1014,10 +1181,11 @@ function writeWaitProfile({ durationSeconds, quality, mode, size }) {
   }
 
   const profiles = readWaitProfiles();
+  const normalizedQuality = normalizeQualityKey(quality);
   const fallback =
-    (DEFAULT_WAIT_ESTIMATES[mode]?.[quality] || DEFAULT_WAIT_ESTIMATES.generate.medium) +
+    (DEFAULT_WAIT_ESTIMATES[mode]?.[normalizedQuality] || DEFAULT_WAIT_ESTIMATES.generate["2k"]) +
     getSizeWaitAdjustment(size);
-  const currentBucket = profiles?.[mode]?.[quality]?.[size] || {
+  const currentBucket = profiles?.[mode]?.[normalizedQuality]?.[size] || {
     averageSeconds: fallback,
     sampleCount: 0
   };
@@ -1033,8 +1201,8 @@ function writeWaitProfile({ durationSeconds, quality, mode, size }) {
     ...profiles,
     [mode]: {
       ...(profiles[mode] || {}),
-      [quality]: {
-        ...(profiles?.[mode]?.[quality] || {}),
+      [normalizedQuality]: {
+        ...(profiles?.[mode]?.[normalizedQuality] || {}),
         [size]: {
           averageSeconds: nextAverageSeconds,
           sampleCount: nextSampleCount
